@@ -4,3 +4,4 @@ build/
 .CMakeFiles/
 cmake-build*/
 .idea/
+third_party/

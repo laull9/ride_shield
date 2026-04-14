@@ -1,0 +1,87 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 30,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "host-debug",
+      "displayName": "Host Debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/host-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "RIDESHIELD_ENABLE_SOURCE_DEPENDENCY_TARGETS": "ON"
+      }
+    },
+    {
+      "name": "host-windows-debug",
+      "displayName": "Host Windows Debug",
+      "generator": "Visual Studio 17 2022",
+      "architecture": {
+        "value": "x64"
+      },
+      "binaryDir": "${sourceDir}/build/host-windows-debug",
+      "cacheVariables": {
+        "CMAKE_CONFIGURATION_TYPES": "Debug",
+        "RIDESHIELD_ENABLE_SOURCE_DEPENDENCY_TARGETS": "ON"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "rk3588-arm64-release",
+      "displayName": "RK3588 Arm64 Release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/rk3588-arm64-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchains/rk3588-aarch64.cmake",
+        "RIDESHIELD_TARGET_ARCH": "arm64",
+        "RIDESHIELD_ENABLE_SOURCE_DEPENDENCY_TARGETS": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "build-host-debug",
+      "configurePreset": "host-debug"
+    },
+    {
+      "name": "build-host-windows-debug",
+      "configurePreset": "host-windows-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "deps-fetch-host",
+      "configurePreset": "host-debug",
+      "targets": [
+        "deps-fetch"
+      ]
+    },
+    {
+      "name": "deps-build-host-windows",
+      "configurePreset": "host-windows-debug",
+      "configuration": "Debug",
+      "targets": [
+        "deps-build"
+      ]
+    },
+    {
+      "name": "deps-build-host",
+      "configurePreset": "host-debug",
+      "targets": [
+        "deps-build"
+      ]
+    },
+    {
+      "name": "build-rk3588-arm64-release",
+      "configurePreset": "rk3588-arm64-release"
+    }
+  ]
+}

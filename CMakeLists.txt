@@ -1,45 +1,24 @@
 cmake_minimum_required(VERSION 3.30)
 
-# 项目名
-set(PROJECT_NAME myproject)
+set(PROJECT_NAME RideShield)
 set(PROJECT_TARGET_LIB ${PROJECT_NAME}_lib)
-set(USE_STATIC ON)
+option(USE_STATIC "Link libstdc++/libgcc statically when possible" ON)
+option(RIDESHIELD_ENABLE_SOURCE_DEPENDENCY_TARGETS "Create source-fetch and superbuild targets for third-party dependencies" ON)
 
-# 是否去除终端
-# if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-#     set(NO_TERMINAL OFF)
-# else ()
-#     set(NO_TERMINAL ON)
-# endif ()
+project(${PROJECT_NAME} LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_C_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+include(ThirdPartySources)
+include(ProjectDependencies)
 
-# vcpkg 默认链接
-if(LINUX)
-    set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" CACHE STRING "Vcpkg toolchain" FORCE)
-    set(DEFAULT_VCPKG_TRIPLET "x64-linux")
-elseif(WIN32)
-    set(CMAKE_TOOLCHAIN_FILE "E:/vcpkg/scripts/buildsystems/vcpkg.cmake" CACHE STRING "Vcpkg toolchain" FORCE)
-    if(USE_STATIC)
-        set(DEFAULT_VCPKG_TRIPLET "x64-windows-static")
-    else()
-        set(DEFAULT_VCPKG_TRIPLET "x64-windows")
-    endif()
-endif()
+rideshield_enable_source_dependency_targets()
+rideshield_resolve_dependencies()
 
-project(${PROJECT_NAME})
-
-set(VCPKG_TARGET_TRIPLET ${DEFAULT_VCPKG_TRIPLET} CACHE STRING "Vcpkg target triplet" FORCE)
-
-message(STATUS "-----Using toolchain: ${CMAKE_TOOLCHAIN_FILE}")
-message(STATUS "-----Vcpkg triplet: ${VCPKG_TARGET_TRIPLET}")
-
-
-# 输出目录
 set(BASE_OUTPUT_DIR "${CMAKE_BINARY_DIR}/out")
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${BASE_OUTPUT_DIR}/bin")
@@ -49,6 +28,23 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${BASE_OUTPUT_DIR}/lib")
 file(MAKE_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
 file(MAKE_DIRECTORY "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}")
 file(MAKE_DIRECTORY "${CMAKE_ARCHIVE_OUTPUT_DIRECTORY}")
+
+function(rideshield_configure_runtime_support target_name)
+    if(NOT TARGET ${target_name})
+        return()
+    endif()
+
+    if(RIDESHIELD_ONNXRUNTIME_RUNTIME_DIRS AND NOT WIN32)
+        set_property(TARGET ${target_name} APPEND PROPERTY BUILD_RPATH "${RIDESHIELD_ONNXRUNTIME_RUNTIME_DIRS}")
+    endif()
+
+    if(WIN32 AND RIDESHIELD_ONNXRUNTIME_RUNTIME_FILES)
+        add_custom_command(TARGET ${target_name} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RIDESHIELD_ONNXRUNTIME_RUNTIME_FILES} $<TARGET_FILE_DIR:${target_name}>
+            COMMAND_EXPAND_LISTS
+        )
+    endif()
+endfunction()
 
 if(USE_STATIC)
     if(MSVC)
@@ -66,8 +62,15 @@ include_directories(
     ${PROJECT_SOURCE_DIR}/resource
 )
 
-# 把 src/*.cpp 变为项目主库（供主程序 & 测试共享）
-file(GLOB SRC_SOURCES "src/*.cpp")
+file(GLOB_RECURSE SRC_SOURCES CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/src/*.cpp")
+
+if(NOT TARGET RideShield::onnxruntime)
+    list(FILTER SRC_SOURCES EXCLUDE REGEX ".*/(onnx_zero_copy|model_pipeline|yolo_detector|front_perception|rear_perception)\\.cpp$")
+endif()
+
+if(NOT RIDESHIELD_HAS_ROS2)
+    list(FILTER SRC_SOURCES EXCLUDE REGEX ".*/ros2/.*\\.cpp$")
+endif()
 
 add_library(${PROJECT_TARGET_LIB} ${SRC_SOURCES})
 
@@ -76,32 +79,34 @@ target_include_directories(${PROJECT_TARGET_LIB} PUBLIC
     ${PROJECT_SOURCE_DIR}/resource
 )
 
-# 第三方依赖
-################################################################
-################################################################
-find_package(fmt REQUIRED)
+target_compile_features(${PROJECT_TARGET_LIB} PUBLIC cxx_std_23)
+
 target_link_libraries(${PROJECT_TARGET_LIB} PUBLIC fmt::fmt)
 
+if(RIDESHIELD_HAS_OPENCV)
+    target_include_directories(${PROJECT_TARGET_LIB} PUBLIC ${OpenCV_INCLUDE_DIRS})
+    target_link_libraries(${PROJECT_TARGET_LIB} PUBLIC ${OpenCV_LIBS})
+    target_compile_definitions(${PROJECT_TARGET_LIB} PUBLIC RIDESHIELD_HAS_OPENCV=1)
+endif()
 
+if(TARGET RideShield::onnxruntime)
+    target_link_libraries(${PROJECT_TARGET_LIB} PUBLIC RideShield::onnxruntime)
+    target_compile_definitions(${PROJECT_TARGET_LIB} PUBLIC RIDESHIELD_HAS_ONNXRUNTIME=1)
+endif()
 
+if(RIDESHIELD_HAS_ROS2)
+    target_link_libraries(${PROJECT_TARGET_LIB} PUBLIC rclcpp::rclcpp sensor_msgs::sensor_msgs std_msgs::std_msgs)
+    target_compile_definitions(${PROJECT_TARGET_LIB} PUBLIC RIDESHIELD_HAS_ROS2=1)
+endif()
 
-
-################################################################
-################################################################
-
-# 在 no-terminal / Windows 情况下的宏与依赖全部放在库中（测试能继承）
 if(NO_TERMINAL AND WIN32)
     target_link_libraries(${PROJECT_TARGET_LIB} PUBLIC user32 gdi32)
     target_compile_definitions(${PROJECT_TARGET_LIB} PUBLIC USE_SUB_WINDOW)
 endif()
 
-
-# 主程序独立编译 main.cpp（不包含源码）
 add_executable(${PROJECT_NAME} main.cpp)
 target_link_libraries(${PROJECT_NAME} PRIVATE ${PROJECT_TARGET_LIB})
-
-
-# gtest 支持、tests 目录自动扫描
+rideshield_configure_runtime_support(${PROJECT_NAME})
 
 enable_testing()
 
@@ -115,7 +120,6 @@ FetchContent_Declare(
 set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
-# 自动扫描 tests/*.cpp
 file(GLOB TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp")
 
 foreach(TEST_FILE ${TEST_SOURCES})
@@ -131,6 +135,8 @@ foreach(TEST_FILE ${TEST_SOURCES})
     )
 
     target_compile_features(${TEST_NAME} PRIVATE cxx_std_23)
+    target_compile_definitions(${TEST_NAME} PRIVATE PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+    rideshield_configure_runtime_support(${TEST_NAME})
 
     add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME})
 endforeach()
