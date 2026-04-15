@@ -305,7 +305,13 @@ TEST_F(CameraLiveTest, CameraGrabSingleFrame) {
 #include <gtest/gtest.h>
 
 TEST(CameraLiveTest, SkippedNoDependencies) {
+    #if defined(RIDESHIELD_ONNXRUNTIME_RUNTIME_ONLY) && defined(RIDESHIELD_HAS_OPENCV)
+    GTEST_SKIP() << "OpenCV is available and ONNX Runtime shared libraries were found, but ONNX Runtime development headers are missing. Install libonnxruntime-dev or enable RIDESHIELD_ENABLE_SOURCE_DEPENDENCY_TARGETS.";
+    #elif defined(RIDESHIELD_HAS_OPENCV)
+    GTEST_SKIP() << "OpenCV is available, but ONNX Runtime was not fully detected. Install libonnxruntime-dev or enable RIDESHIELD_ENABLE_SOURCE_DEPENDENCY_TARGETS.";
+    #else
     GTEST_SKIP() << "Requires RIDESHIELD_HAS_ONNXRUNTIME and RIDESHIELD_HAS_OPENCV";
+    #endif
 }
 
 #endif // RIDESHIELD_HAS_ONNXRUNTIME && RIDESHIELD_HAS_OPENCV

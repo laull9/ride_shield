@@ -12,7 +12,14 @@
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/host-debug",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "host-debug-source-deps",
+      "displayName": "Host Debug (source deps)",
+      "inherits": "host-debug",
+      "cacheVariables": {
         "RIDESHIELD_ENABLE_SOURCE_DEPENDENCY_TARGETS": "ON"
       }
     },
@@ -25,13 +32,20 @@
       },
       "binaryDir": "${sourceDir}/build/host-windows-debug",
       "cacheVariables": {
-        "CMAKE_CONFIGURATION_TYPES": "Debug",
-        "RIDESHIELD_ENABLE_SOURCE_DEPENDENCY_TARGETS": "ON"
+        "CMAKE_CONFIGURATION_TYPES": "Debug"
       },
       "condition": {
         "type": "equals",
         "lhs": "${hostSystemName}",
         "rhs": "Windows"
+      }
+    },
+    {
+      "name": "host-windows-debug-source-deps",
+      "displayName": "Host Windows Debug (source deps)",
+      "inherits": "host-windows-debug",
+      "cacheVariables": {
+        "RIDESHIELD_ENABLE_SOURCE_DEPENDENCY_TARGETS": "ON"
       }
     },
     {
@@ -59,14 +73,14 @@
     },
     {
       "name": "deps-fetch-host",
-      "configurePreset": "host-debug",
+      "configurePreset": "host-debug-source-deps",
       "targets": [
         "deps-fetch"
       ]
     },
     {
       "name": "deps-build-host-windows",
-      "configurePreset": "host-windows-debug",
+      "configurePreset": "host-windows-debug-source-deps",
       "configuration": "Debug",
       "targets": [
         "deps-build"
@@ -74,7 +88,7 @@
     },
     {
       "name": "deps-build-host",
-      "configurePreset": "host-debug",
+      "configurePreset": "host-debug-source-deps",
       "targets": [
         "deps-build"
       ]

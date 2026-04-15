@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.30)
 set(PROJECT_NAME RideShield)
 set(PROJECT_TARGET_LIB ${PROJECT_NAME}_lib)
 option(USE_STATIC "Link libstdc++/libgcc statically when possible" ON)
-option(RIDESHIELD_ENABLE_SOURCE_DEPENDENCY_TARGETS "Create source-fetch and superbuild targets for third-party dependencies" ON)
+option(RIDESHIELD_ENABLE_SOURCE_DEPENDENCY_TARGETS "Create source-fetch and superbuild targets for third-party dependencies" OFF)
 
 project(${PROJECT_NAME} LANGUAGES C CXX)
 
@@ -136,6 +136,9 @@ foreach(TEST_FILE ${TEST_SOURCES})
 
     target_compile_features(${TEST_NAME} PRIVATE cxx_std_23)
     target_compile_definitions(${TEST_NAME} PRIVATE PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+    if((ONNXRUNTIME_LIBRARY OR ONNXRUNTIME_RUNTIME_LIBRARY OR ONNXRUNTIME_PROVIDERS_SHARED) AND NOT TARGET RideShield::onnxruntime)
+        target_compile_definitions(${TEST_NAME} PRIVATE RIDESHIELD_ONNXRUNTIME_RUNTIME_ONLY=1)
+    endif()
     rideshield_configure_runtime_support(${TEST_NAME})
 
     add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME})
