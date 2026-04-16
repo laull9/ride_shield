@@ -4,8 +4,9 @@ set(PROJECT_NAME RideShield)
 set(PROJECT_TARGET_LIB ${PROJECT_NAME}_lib)
 option(USE_STATIC "Link libstdc++/libgcc statically when possible" ON)
 option(RIDESHIELD_ENABLE_SOURCE_DEPENDENCY_TARGETS "Create source-fetch and superbuild targets for third-party dependencies" OFF)
+option(RIDESHIELD_ENABLE_UI "Build Qt6 Quick car HMI (requires Qt6 Quick)" ON)
 
-project(${PROJECT_NAME} LANGUAGES C CXX)
+project(${PROJECT_NAME} LANGUAGES C CXX ASM)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_C_STANDARD 23)
@@ -74,6 +75,9 @@ if(NOT RIDESHIELD_HAS_ROS2)
     list(FILTER SRC_SOURCES EXCLUDE REGEX ".*/ros2/.*\\.cpp$")
 endif()
 
+# UI bridge 源码不进 lib —— 它需要 Qt moc，由主可执行文件直接编译
+list(FILTER SRC_SOURCES EXCLUDE REGEX ".*/ui/.*\\.cpp$")
+
 add_library(${PROJECT_TARGET_LIB} ${SRC_SOURCES})
 
 target_include_directories(${PROJECT_TARGET_LIB} PUBLIC
@@ -101,13 +105,67 @@ if(RIDESHIELD_HAS_ROS2)
     target_compile_definitions(${PROJECT_TARGET_LIB} PUBLIC RIDESHIELD_HAS_ROS2=1)
 endif()
 
+# ── 嵌入 ONNX 模型到二进制 ──
+if(TARGET RideShield::onnxruntime)
+    include(EmbedResource)
+    rideshield_embed_resource(${PROJECT_TARGET_LIB}
+        rideshield_yolo_model "${CMAKE_CURRENT_SOURCE_DIR}/res/yolo26n.onnx"
+    )
+    target_compile_definitions(${PROJECT_TARGET_LIB} PUBLIC RIDESHIELD_HAS_EMBEDDED_MODEL=1)
+endif()
+
 if(NO_TERMINAL AND WIN32)
     target_link_libraries(${PROJECT_TARGET_LIB} PUBLIC user32 gdi32)
     target_compile_definitions(${PROJECT_TARGET_LIB} PUBLIC USE_SUB_WINDOW)
 endif()
 
-add_executable(${PROJECT_NAME} main.cpp)
-target_link_libraries(${PROJECT_NAME} PRIVATE ${PROJECT_TARGET_LIB})
+# ── Qt6 Quick 车机 UI（默认启用） ──
+set(RIDESHIELD_HAS_QT_UI OFF)
+if(RIDESHIELD_ENABLE_UI)
+    find_package(Qt6 6.5 QUIET COMPONENTS Quick QuickControls2)
+    if(Qt6_FOUND)
+        set(RIDESHIELD_HAS_QT_UI ON)
+        qt_standard_project_setup(REQUIRES 6.5)
+        message(STATUS "[RideShield] Qt6 ${Qt6_VERSION} detected — building with UI")
+    else()
+        message(STATUS "[RideShield] Qt6 Quick not found — building headless")
+    endif()
+endif()
+
+if(RIDESHIELD_HAS_QT_UI)
+    qt_add_executable(${PROJECT_NAME}
+        main.cpp
+        src/ui/vehicle_bridge.cpp
+        inc/RideShield/ui/vehicle_bridge.h
+    )
+
+    set_source_files_properties(ui/qml/Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
+
+    qt_add_qml_module(${PROJECT_NAME}
+        URI    RideShield.UI
+        VERSION 1.0
+        QML_FILES
+            ui/qml/Main.qml
+            ui/qml/Theme.qml
+            ui/qml/StatusBar.qml
+            ui/qml/DashboardPanel.qml
+            ui/qml/DetectionPanel.qml
+            ui/qml/RearViewPanel.qml
+            ui/qml/MetricCard.qml
+            ui/qml/ZoneIndicator.qml
+    )
+
+    target_link_libraries(${PROJECT_NAME} PRIVATE
+        ${PROJECT_TARGET_LIB}
+        Qt6::Quick
+        Qt6::QuickControls2
+    )
+    target_compile_definitions(${PROJECT_NAME} PRIVATE RIDESHIELD_HAS_QT_UI=1)
+else()
+    add_executable(${PROJECT_NAME} main.cpp)
+    target_link_libraries(${PROJECT_NAME} PRIVATE ${PROJECT_TARGET_LIB})
+endif()
+
 rideshield_configure_runtime_support(${PROJECT_NAME})
 
 include(CTest)
@@ -139,9 +197,6 @@ if(BUILD_TESTING)
 
         target_compile_features(${TEST_NAME} PRIVATE cxx_std_23)
         target_compile_definitions(${TEST_NAME} PRIVATE PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
-        if((ONNXRUNTIME_LIBRARY OR ONNXRUNTIME_RUNTIME_LIBRARY OR ONNXRUNTIME_PROVIDERS_SHARED) AND NOT TARGET RideShield::onnxruntime)
-            target_compile_definitions(${TEST_NAME} PRIVATE RIDESHIELD_ONNXRUNTIME_RUNTIME_ONLY=1)
-        endif()
         rideshield_configure_runtime_support(${TEST_NAME})
 
         list(APPEND RIDESHIELD_TEST_TARGETS ${TEST_NAME})
@@ -164,4 +219,6 @@ if(BUILD_TESTING)
         )
     endif()
 endif()
+
+
 

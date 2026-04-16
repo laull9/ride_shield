@@ -101,6 +101,8 @@ install_with_apt() {
         curl
         ca-certificates
         libopencv-dev
+        qt6-declarative-dev
+        qt6-shadertools-dev
     )
 
     if apt_has_package libonnxruntime-dev; then
@@ -133,6 +135,9 @@ install_with_dnf() {
         curl
         ca-certificates
         opencv-devel
+        qt6-qtdeclarative-devel
+        qt6-qtquickcontrols2-devel
+        qt6-qtshadertools-devel
     )
 
     if dnf_has_package onnxruntime-devel; then
@@ -160,6 +165,9 @@ install_with_pacman() {
         curl
         ca-certificates
         opencv
+        qt6-declarative
+        qt6-quickcontrols2
+        qt6-shadertools
     )
 
     if pacman_has_package onnxruntime; then
@@ -192,6 +200,9 @@ install_with_zypper() {
         curl
         ca-certificates
         opencv-devel
+        qt6-declarative-devel
+        qt6-quickcontrols2-devel
+        qt6-shadertools-devel
     )
 
     if zypper_has_package onnxruntime-devel; then

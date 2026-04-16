@@ -32,11 +32,17 @@ public:
     OnnxSession(const std::filesystem::path& model_path, Config config);
     explicit OnnxSession(const std::filesystem::path& model_path);
 
+    /// 从内存缓冲区加载模型（用于嵌入式资源）
+    OnnxSession(std::span<const unsigned char> model_data, Config config);
+    explicit OnnxSession(std::span<const unsigned char> model_data);
+
     [[nodiscard]] auto input_names() const -> const std::vector<std::string>&;
     [[nodiscard]] auto output_names() const -> const std::vector<std::string>&;
     auto run(std::span<const NamedTensorView> inputs) -> std::vector<Ort::Value>;
 
 private:
+    void populate_names();
+
     Ort::Env env_;
     Ort::SessionOptions session_options_;
     Ort::Session session_;

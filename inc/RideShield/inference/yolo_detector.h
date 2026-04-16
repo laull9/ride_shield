@@ -3,7 +3,9 @@
 #include "RideShield/core/types.h"
 #include "RideShield/inference/yolo_preprocess.h"
 
+#include <cstddef>
 #include <filesystem>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -15,6 +17,8 @@ namespace RideShield::inference {
 
 struct YoloDetectorConfig {
     std::filesystem::path model_path{"yolo26n.onnx"};
+    /// 如果非空，则从内存加载模型（优先于 model_path）
+    std::span<const unsigned char> model_data{};
     int input_size{640};
     float score_threshold{0.25f};
     std::size_t intra_threads{1};

@@ -55,6 +55,20 @@ OnnxSession::OnnxSession(const std::filesystem::path& model_path, Config config)
     : env_(ORT_LOGGING_LEVEL_WARNING, "RideShield"),
       session_options_(make_session_options(config)),
       session_(env_, model_path.c_str(), session_options_) {
+    populate_names();
+}
+
+OnnxSession::OnnxSession(std::span<const unsigned char> model_data)
+    : OnnxSession(model_data, Config{}) {}
+
+OnnxSession::OnnxSession(std::span<const unsigned char> model_data, Config config)
+    : env_(ORT_LOGGING_LEVEL_WARNING, "RideShield"),
+      session_options_(make_session_options(config)),
+      session_(env_, model_data.data(), model_data.size(), session_options_) {
+    populate_names();
+}
+
+void OnnxSession::populate_names() {
     Ort::AllocatorWithDefaultOptions allocator;
     const auto input_count = session_.GetInputCount();
     input_names_.reserve(input_count);

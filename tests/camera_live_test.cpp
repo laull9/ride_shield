@@ -11,6 +11,11 @@
 #include "RideShield/perception/front_perception.h"
 #include "RideShield/inference/yolo_detector.h"
 
+#ifdef RIDESHIELD_HAS_EMBEDDED_MODEL
+extern const unsigned char rideshield_yolo_model_data[];
+extern const unsigned char rideshield_yolo_model_end[];
+#endif
+
 #include <opencv2/core.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
@@ -122,22 +127,40 @@ void draw_hud(cv::Mat& frame,
 
 class CameraLiveTest : public ::testing::Test {
 protected:
-    static std::filesystem::path model_path() {
+    static inference::YoloDetectorConfig make_config(float score_threshold = 0.25f,
+                                                      std::size_t threads = 2) {
+        inference::YoloDetectorConfig cfg{
+            .input_size = 640,
+            .score_threshold = score_threshold,
+            .intra_threads = threads,
+        };
+#ifdef RIDESHIELD_HAS_EMBEDDED_MODEL
+        cfg.model_data = {rideshield_yolo_model_data,
+                          static_cast<std::size_t>(rideshield_yolo_model_end - rideshield_yolo_model_data)};
+#else
         auto p = std::filesystem::path("res/yolo26n.onnx");
-        if (!std::filesystem::exists(p)) {
+        if (!std::filesystem::exists(p))
             p = std::filesystem::path(PROJECT_SOURCE_DIR) / "res" / "yolo26n.onnx";
-        }
-        return p;
+        cfg.model_path = p;
+#endif
+        return cfg;
     }
 
     static bool model_available() {
-        return std::filesystem::exists(model_path());
+#ifdef RIDESHIELD_HAS_EMBEDDED_MODEL
+        return true;
+#else
+        auto p = std::filesystem::path("res/yolo26n.onnx");
+        if (!std::filesystem::exists(p))
+            p = std::filesystem::path(PROJECT_SOURCE_DIR) / "res" / "yolo26n.onnx";
+        return std::filesystem::exists(p);
+#endif
     }
 };
 
 /// 打开设备默认摄像头，实时推理并标注
 TEST_F(CameraLiveTest, FrontCameraRealtimeAnnotation) {
-    if (!model_available()) GTEST_SKIP() << "Model not found: " << model_path();
+    if (!model_available()) GTEST_SKIP() << "Model not available";
 
     // 打开摄像头 (设备 0)
     cv::VideoCapture cap(0);
@@ -149,12 +172,7 @@ TEST_F(CameraLiveTest, FrontCameraRealtimeAnnotation) {
     cap.set(cv::CAP_PROP_FRAME_WIDTH, 640);
     cap.set(cv::CAP_PROP_FRAME_HEIGHT, 480);
 
-    inference::YoloDetectorConfig detector_config{
-        .model_path = model_path(),
-        .input_size = 640,
-        .score_threshold = 0.25f,
-        .intra_threads = 2,
-    };
+    auto detector_config = make_config();
 
     // 放宽风险阈值：bbox 底边需要更靠近画面底部才触发预警
     // 避免远处行人/车辆被误判为高风险
@@ -207,7 +225,7 @@ TEST_F(CameraLiveTest, FrontCameraRealtimeAnnotation) {
 
 /// 指定摄像头索引测试（从环境变量 CAMERA_INDEX 获取）
 TEST_F(CameraLiveTest, CustomCameraIndex) {
-    if (!model_available()) GTEST_SKIP() << "Model not found: " << model_path();
+    if (!model_available()) GTEST_SKIP() << "Model not available";
 
     const char* env_idx = std::getenv("CAMERA_INDEX");
     if (!env_idx) {
@@ -223,12 +241,7 @@ TEST_F(CameraLiveTest, CustomCameraIndex) {
     cap.set(cv::CAP_PROP_FRAME_WIDTH, 640);
     cap.set(cv::CAP_PROP_FRAME_HEIGHT, 480);
 
-    inference::YoloDetectorConfig detector_config{
-        .model_path = model_path(),
-        .input_size = 640,
-        .score_threshold = 0.25f,
-        .intra_threads = 2,
-    };
+    inference::YoloDetectorConfig detector_config = make_config();
 
     perception::FrontPerception::Config perception_config{
         .ttc_warn_seconds      = 2.0f,
@@ -265,7 +278,7 @@ TEST_F(CameraLiveTest, CustomCameraIndex) {
 
 /// 验证摄像头能正常打开并抓取至少一帧（无 GUI 模式）
 TEST_F(CameraLiveTest, CameraGrabSingleFrame) {
-    if (!model_available()) GTEST_SKIP() << "Model not found: " << model_path();
+    if (!model_available()) GTEST_SKIP() << "Model not available";
 
     cv::VideoCapture cap(0);
     if (!cap.isOpened()) {
@@ -279,14 +292,7 @@ TEST_F(CameraLiveTest, CameraGrabSingleFrame) {
     EXPECT_GT(frame.rows, 0);
 
     // 跑一次前向感知
-    inference::YoloDetectorConfig detector_config{
-        .model_path = model_path(),
-        .input_size = 640,
-        .score_threshold = 0.25f,
-        .intra_threads = 2,
-    };
-
-    perception::FrontPerception front(detector_config);
+    perception::FrontPerception front(make_config());
     auto result = front.process(frame);
 
     EXPECT_GE(result.report.inference_ms, 0.f);
@@ -305,13 +311,7 @@ TEST_F(CameraLiveTest, CameraGrabSingleFrame) {
 #include <gtest/gtest.h>
 
 TEST(CameraLiveTest, SkippedNoDependencies) {
-    #if defined(RIDESHIELD_ONNXRUNTIME_RUNTIME_ONLY) && defined(RIDESHIELD_HAS_OPENCV)
-    GTEST_SKIP() << "OpenCV is available and ONNX Runtime shared libraries were found, but ONNX Runtime development headers are missing. Install libonnxruntime-dev or enable RIDESHIELD_ENABLE_SOURCE_DEPENDENCY_TARGETS.";
-    #elif defined(RIDESHIELD_HAS_OPENCV)
-    GTEST_SKIP() << "OpenCV is available, but ONNX Runtime was not fully detected. Install libonnxruntime-dev or enable RIDESHIELD_ENABLE_SOURCE_DEPENDENCY_TARGETS.";
-    #else
     GTEST_SKIP() << "Requires RIDESHIELD_HAS_ONNXRUNTIME and RIDESHIELD_HAS_OPENCV";
-    #endif
 }
 
 #endif // RIDESHIELD_HAS_ONNXRUNTIME && RIDESHIELD_HAS_OPENCV

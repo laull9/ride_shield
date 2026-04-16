@@ -46,6 +46,7 @@ private:
     Thresholds thresholds_;
 
     static auto risk_to_score(core::RiskLevel level) -> float;
+    static auto front_ttc_to_score(const core::FrontPerceptionResult& front) -> float;
 };
 
 }  // namespace RideShield::decision

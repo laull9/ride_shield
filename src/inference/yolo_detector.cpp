@@ -8,15 +8,26 @@
 #include <chrono>
 #include <stdexcept>
 
+namespace {
+auto make_onnx_session(const RideShield::inference::YoloDetectorConfig& config)
+    -> RideShield::inference::OnnxSession {
+    RideShield::inference::OnnxSession::Config ort_config{
+        .intra_op_threads = config.intra_threads,
+        .enable_cpu_mem_arena = true,
+    };
+    if (!config.model_data.empty()) {
+        return RideShield::inference::OnnxSession(config.model_data, ort_config);
+    }
+    return RideShield::inference::OnnxSession(config.model_path, ort_config);
+}
+}  // namespace
+
 namespace RideShield::inference {
 
 YoloDetector::YoloDetector(YoloDetectorConfig config)
     : config_(std::move(config)),
       preprocess_(config_.input_size),
-      session_(config_.model_path, OnnxSession::Config{
-          .intra_op_threads = config_.intra_threads,
-          .enable_cpu_mem_arena = true,
-      }) {
+      session_(make_onnx_session(config_)) {
     // 获取模型输入名称
     const auto& input_names = session_.input_names();
     if (input_names.empty()) {

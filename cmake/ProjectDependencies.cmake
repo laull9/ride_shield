@@ -1,5 +1,7 @@
 include(FetchContent)
 
+set(RIDESHIELD_ONNXRUNTIME_VERSION "1.21.0" CACHE STRING "ONNX Runtime release version to download")
+
 function(_rideshield_prepend_prefix_if_exists prefix_path)
     if(EXISTS "${prefix_path}")
         list(PREPEND CMAKE_PREFIX_PATH "${prefix_path}")
@@ -7,43 +9,36 @@ function(_rideshield_prepend_prefix_if_exists prefix_path)
     endif()
 endfunction()
 
-function(_rideshield_collect_onnxruntime_search_paths out_var root_path)
-    set(_paths
-        "${root_path}"
-        "${root_path}/bin"
-        "${root_path}/lib"
-        "${root_path}/lib64"
-        "${root_path}/Debug"
-        "${root_path}/Release"
-        "${root_path}/RelWithDebInfo"
-        "${root_path}/MinSizeRel"
-        "${root_path}/bin/Debug"
-        "${root_path}/bin/Release"
-        "${root_path}/bin/RelWithDebInfo"
-        "${root_path}/bin/MinSizeRel"
-        "${root_path}/lib/Debug"
-        "${root_path}/lib/Release"
-        "${root_path}/lib/RelWithDebInfo"
-        "${root_path}/lib/MinSizeRel")
-    list(REMOVE_DUPLICATES _paths)
-    set(${out_var} "${_paths}" PARENT_SCOPE)
-endfunction()
+# ── 根据目标平台选择 ORT 预编译包 URL ──
+function(_rideshield_onnxruntime_release_url out_url out_root_name)
+    set(_ver "${RIDESHIELD_ONNXRUNTIME_VERSION}")
 
-function(_rideshield_find_first_matching_file out_var)
-    set(_matches "")
-    foreach(_pattern IN LISTS ARGN)
-        file(GLOB _pattern_matches LIST_DIRECTORIES FALSE "${_pattern}")
-        list(APPEND _matches ${_pattern_matches})
-    endforeach()
-
-    if(_matches)
-        list(REMOVE_DUPLICATES _matches)
-        list(SORT _matches COMPARE NATURAL ORDER DESCENDING)
-        list(GET _matches 0 _first_match)
-        set(${out_var} "${_first_match}" PARENT_SCOPE)
-    else()
-        set(${out_var} "${out_var}-NOTFOUND" PARENT_SCOPE)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Windows" OR WIN32)
+        set(_name "onnxruntime-win-x64-${_ver}")
+        set(${out_url} "https://github.com/microsoft/onnxruntime/releases/download/v${_ver}/${_name}.zip" PARENT_SCOPE)
+        set(${out_root_name} "${_name}" PARENT_SCOPE)
+        return()
     endif()
+
+    if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR APPLE)
+        # macOS universal binary
+        set(_name "onnxruntime-osx-universal2-${_ver}")
+        set(${out_url} "https://github.com/microsoft/onnxruntime/releases/download/v${_ver}/${_name}.tgz" PARENT_SCOPE)
+        set(${out_root_name} "${_name}" PARENT_SCOPE)
+        return()
+    endif()
+
+    # Linux
+    if(RIDESHIELD_TARGET_ARCH MATCHES "^(aarch64|arm64)$"
+       OR CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
+        set(_arch "aarch64")
+    else()
+        set(_arch "x64")
+    endif()
+
+    set(_name "onnxruntime-linux-${_arch}-${_ver}")
+    set(${out_url} "https://github.com/microsoft/onnxruntime/releases/download/v${_ver}/${_name}.tgz" PARENT_SCOPE)
+    set(${out_root_name} "${_name}" PARENT_SCOPE)
 endfunction()
 
 function(rideshield_resolve_dependencies)
@@ -72,193 +67,93 @@ function(rideshield_resolve_dependencies)
         set(OpenCV_LIBS "${OpenCV_LIBS}" PARENT_SCOPE)
     endif()
 
-    set(_onnxruntime_root "${RIDESHIELD_THIRD_PARTY_INSTALL_DIR}/onnxruntime")
-    _rideshield_collect_onnxruntime_search_paths(_onnxruntime_search_paths "${_onnxruntime_root}")
+    # ── ONNX Runtime：下载 Microsoft 官方预编译包（ONNX 静态链接） ──
+    _rideshield_onnxruntime_release_url(_ort_url _ort_root_name)
 
-    set(_onnxruntime_system_search_paths
-        /usr/lib
-        /usr/lib64
-        /usr/lib/x86_64-linux-gnu
-        /usr/local/lib
-        /usr/local/lib64)
-
-    # 优先查找本地第三方安装目录
-    find_path(ONNXRUNTIME_INCLUDE_DIR
-        NAMES onnxruntime_cxx_api.h
-        PATHS
-            "${_onnxruntime_root}/include"
-            "${_onnxruntime_root}/include/onnxruntime"
-            "${_onnxruntime_root}/include/onnxruntime/core/session"
-        PATH_SUFFIXES onnxruntime onnxruntime/core/session
-        NO_DEFAULT_PATH
+    FetchContent_Declare(
+        onnxruntime_prebuilt
+        URL "${_ort_url}"
+        DOWNLOAD_EXTRACT_TIMESTAMP ON
     )
-    find_library(ONNXRUNTIME_LIBRARY
-        NAMES onnxruntime libonnxruntime
-        PATHS ${_onnxruntime_search_paths}
-        NO_DEFAULT_PATH
-    )
+    FetchContent_MakeAvailable(onnxruntime_prebuilt)
 
-    if(NOT ONNXRUNTIME_LIBRARY)
-        set(_onnxruntime_library_patterns "")
-        foreach(_search_root IN LISTS _onnxruntime_search_paths)
-            list(APPEND _onnxruntime_library_patterns
-                "${_search_root}/libonnxruntime.so"
-                "${_search_root}/libonnxruntime.so.*"
-                "${_search_root}/libonnxruntime.dylib"
-                "${_search_root}/onnxruntime.dll"
-                "${_search_root}/onnxruntime.lib")
-        endforeach()
-        _rideshield_find_first_matching_file(ONNXRUNTIME_LIBRARY ${_onnxruntime_library_patterns})
-        if(ONNXRUNTIME_LIBRARY AND NOT ONNXRUNTIME_LIBRARY MATCHES "-NOTFOUND$")
-            set(ONNXRUNTIME_LIBRARY "${ONNXRUNTIME_LIBRARY}" CACHE FILEPATH "Path to the ONNX Runtime library" FORCE)
-        endif()
+    set(_ort_root "${onnxruntime_prebuilt_SOURCE_DIR}")
+
+    # 查找 include 和 lib 目录
+    if(EXISTS "${_ort_root}/include/onnxruntime_cxx_api.h")
+        set(_ort_include "${_ort_root}/include")
+    elseif(EXISTS "${_ort_root}/include/onnxruntime/onnxruntime_cxx_api.h")
+        set(_ort_include "${_ort_root}/include/onnxruntime")
+    else()
+        set(_ort_include "")
     endif()
 
-    # 若本地未找到，回退到系统路径
-    find_path(ONNXRUNTIME_INCLUDE_DIR
-        NAMES onnxruntime_cxx_api.h
-        PATH_SUFFIXES onnxruntime onnxruntime/core/session
-    )
-    find_library(ONNXRUNTIME_LIBRARY
-        NAMES onnxruntime libonnxruntime
-    )
-
-    if(NOT ONNXRUNTIME_LIBRARY)
-        set(_onnxruntime_library_patterns "")
-        foreach(_search_root IN LISTS _onnxruntime_system_search_paths)
-            list(APPEND _onnxruntime_library_patterns
-                "${_search_root}/libonnxruntime.so"
-                "${_search_root}/libonnxruntime.so.*"
-                "${_search_root}/libonnxruntime.dylib"
-                "${_search_root}/onnxruntime.dll"
-                "${_search_root}/onnxruntime.lib")
-        endforeach()
-        _rideshield_find_first_matching_file(ONNXRUNTIME_LIBRARY ${_onnxruntime_library_patterns})
-        if(ONNXRUNTIME_LIBRARY AND NOT ONNXRUNTIME_LIBRARY MATCHES "-NOTFOUND$")
-            set(ONNXRUNTIME_LIBRARY "${ONNXRUNTIME_LIBRARY}" CACHE FILEPATH "Path to the ONNX Runtime library" FORCE)
-        endif()
+    if(EXISTS "${_ort_root}/lib")
+        set(_ort_libdir "${_ort_root}/lib")
+    else()
+        set(_ort_libdir "")
     endif()
 
-    find_file(ONNXRUNTIME_RUNTIME_LIBRARY
-        NAMES onnxruntime.dll libonnxruntime.so libonnxruntime.so.1 libonnxruntime.dylib
-        PATHS ${_onnxruntime_search_paths}
-        NO_DEFAULT_PATH
-    )
+    if(_ort_include AND _ort_libdir AND NOT TARGET RideShield_onnxruntime)
+        find_library(_ort_lib
+            NAMES onnxruntime libonnxruntime
+            PATHS "${_ort_libdir}"
+            NO_DEFAULT_PATH
+        )
 
-    if(NOT ONNXRUNTIME_RUNTIME_LIBRARY)
-        set(_onnxruntime_runtime_patterns "")
-        foreach(_search_root IN LISTS _onnxruntime_search_paths)
-            list(APPEND _onnxruntime_runtime_patterns
-                "${_search_root}/libonnxruntime.so"
-                "${_search_root}/libonnxruntime.so.*"
-                "${_search_root}/libonnxruntime.dylib"
-                "${_search_root}/onnxruntime.dll")
-        endforeach()
-        _rideshield_find_first_matching_file(ONNXRUNTIME_RUNTIME_LIBRARY ${_onnxruntime_runtime_patterns})
-        if(ONNXRUNTIME_RUNTIME_LIBRARY AND NOT ONNXRUNTIME_RUNTIME_LIBRARY MATCHES "-NOTFOUND$")
-            set(ONNXRUNTIME_RUNTIME_LIBRARY "${ONNXRUNTIME_RUNTIME_LIBRARY}" CACHE FILEPATH "Path to the ONNX Runtime runtime library" FORCE)
+        if(NOT _ort_lib)
+            # glob fallback for versioned symlinks
+            file(GLOB _ort_lib_candidates "${_ort_libdir}/libonnxruntime.so" "${_ort_libdir}/libonnxruntime.so.*"
+                                          "${_ort_libdir}/libonnxruntime.dylib" "${_ort_libdir}/onnxruntime.lib")
+            if(_ort_lib_candidates)
+                list(SORT _ort_lib_candidates COMPARE NATURAL ORDER DESCENDING)
+                list(GET _ort_lib_candidates 0 _ort_lib)
+            endif()
         endif()
-    endif()
 
-    find_file(ONNXRUNTIME_RUNTIME_LIBRARY
-        NAMES onnxruntime.dll libonnxruntime.so libonnxruntime.so.1 libonnxruntime.dylib
-    )
+        if(_ort_lib)
+            if(WIN32)
+                find_file(_ort_dll NAMES onnxruntime.dll PATHS "${_ort_root}/lib" "${_ort_root}/bin" NO_DEFAULT_PATH)
+                if(_ort_dll)
+                    add_library(RideShield_onnxruntime SHARED IMPORTED)
+                    set_target_properties(RideShield_onnxruntime PROPERTIES
+                        IMPORTED_IMPLIB "${_ort_lib}"
+                        IMPORTED_LOCATION "${_ort_dll}"
+                        INTERFACE_INCLUDE_DIRECTORIES "${_ort_include}"
+                    )
+                endif()
+            else()
+                add_library(RideShield_onnxruntime UNKNOWN IMPORTED)
+                set_target_properties(RideShield_onnxruntime PROPERTIES
+                    IMPORTED_LOCATION "${_ort_lib}"
+                    INTERFACE_INCLUDE_DIRECTORIES "${_ort_include}"
+                )
+            endif()
+            add_library(RideShield::onnxruntime ALIAS RideShield_onnxruntime)
 
-    if(NOT ONNXRUNTIME_RUNTIME_LIBRARY)
-        set(_onnxruntime_runtime_patterns "")
-        foreach(_search_root IN LISTS _onnxruntime_system_search_paths)
-            list(APPEND _onnxruntime_runtime_patterns
-                "${_search_root}/libonnxruntime.so"
-                "${_search_root}/libonnxruntime.so.*"
-                "${_search_root}/libonnxruntime.dylib"
-                "${_search_root}/onnxruntime.dll")
-        endforeach()
-        _rideshield_find_first_matching_file(ONNXRUNTIME_RUNTIME_LIBRARY ${_onnxruntime_runtime_patterns})
-        if(ONNXRUNTIME_RUNTIME_LIBRARY AND NOT ONNXRUNTIME_RUNTIME_LIBRARY MATCHES "-NOTFOUND$")
-            set(ONNXRUNTIME_RUNTIME_LIBRARY "${ONNXRUNTIME_RUNTIME_LIBRARY}" CACHE FILEPATH "Path to the ONNX Runtime runtime library" FORCE)
-        endif()
-    endif()
+            # 收集运行时路径信息
+            set(_ort_runtime_dirs "${_ort_libdir}")
+            set(_ort_runtime_files "")
 
-    find_file(ONNXRUNTIME_PROVIDERS_SHARED
-        NAMES onnxruntime_providers_shared.dll libonnxruntime_providers_shared.so libonnxruntime_providers_shared.so.1 libonnxruntime_providers_shared.dylib
-        PATHS ${_onnxruntime_search_paths}
-        NO_DEFAULT_PATH
-    )
+            file(GLOB _ort_runtime_candidates
+                "${_ort_libdir}/libonnxruntime.so*"
+                "${_ort_libdir}/libonnxruntime.dylib"
+                "${_ort_libdir}/libonnxruntime_providers_shared.so*"
+                "${_ort_libdir}/libonnxruntime_providers_shared.dylib"
+                "${_ort_root}/bin/onnxruntime.dll"
+                "${_ort_root}/bin/onnxruntime_providers_shared.dll")
+            list(APPEND _ort_runtime_files ${_ort_runtime_candidates})
+            list(REMOVE_DUPLICATES _ort_runtime_files)
 
-    if(NOT ONNXRUNTIME_PROVIDERS_SHARED)
-        set(_onnxruntime_provider_patterns "")
-        foreach(_search_root IN LISTS _onnxruntime_search_paths)
-            list(APPEND _onnxruntime_provider_patterns
-                "${_search_root}/libonnxruntime_providers_shared.so"
-                "${_search_root}/libonnxruntime_providers_shared.so.*"
-                "${_search_root}/libonnxruntime_providers_shared.dylib"
-                "${_search_root}/onnxruntime_providers_shared.dll")
-        endforeach()
-        _rideshield_find_first_matching_file(ONNXRUNTIME_PROVIDERS_SHARED ${_onnxruntime_provider_patterns})
-        if(ONNXRUNTIME_PROVIDERS_SHARED AND NOT ONNXRUNTIME_PROVIDERS_SHARED MATCHES "-NOTFOUND$")
-            set(ONNXRUNTIME_PROVIDERS_SHARED "${ONNXRUNTIME_PROVIDERS_SHARED}" CACHE FILEPATH "Path to the ONNX Runtime providers shared library" FORCE)
-        endif()
-    endif()
+            set(RIDESHIELD_ONNXRUNTIME_RUNTIME_DIRS "${_ort_runtime_dirs}" PARENT_SCOPE)
+            set(RIDESHIELD_ONNXRUNTIME_RUNTIME_FILES "${_ort_runtime_files}" PARENT_SCOPE)
 
-    find_file(ONNXRUNTIME_PROVIDERS_SHARED
-        NAMES onnxruntime_providers_shared.dll libonnxruntime_providers_shared.so libonnxruntime_providers_shared.so.1 libonnxruntime_providers_shared.dylib
-    )
-
-    if(NOT ONNXRUNTIME_PROVIDERS_SHARED)
-        set(_onnxruntime_provider_patterns "")
-        foreach(_search_root IN LISTS _onnxruntime_system_search_paths)
-            list(APPEND _onnxruntime_provider_patterns
-                "${_search_root}/libonnxruntime_providers_shared.so"
-                "${_search_root}/libonnxruntime_providers_shared.so.*"
-                "${_search_root}/libonnxruntime_providers_shared.dylib"
-                "${_search_root}/onnxruntime_providers_shared.dll")
-        endforeach()
-        _rideshield_find_first_matching_file(ONNXRUNTIME_PROVIDERS_SHARED ${_onnxruntime_provider_patterns})
-        if(ONNXRUNTIME_PROVIDERS_SHARED AND NOT ONNXRUNTIME_PROVIDERS_SHARED MATCHES "-NOTFOUND$")
-            set(ONNXRUNTIME_PROVIDERS_SHARED "${ONNXRUNTIME_PROVIDERS_SHARED}" CACHE FILEPATH "Path to the ONNX Runtime providers shared library" FORCE)
-        endif()
-    endif()
-
-    if(ONNXRUNTIME_INCLUDE_DIR AND ONNXRUNTIME_LIBRARY AND NOT TARGET RideShield_onnxruntime)
-        get_filename_component(_onnxruntime_library_ext "${ONNXRUNTIME_LIBRARY}" EXT)
-        if(WIN32 AND ONNXRUNTIME_RUNTIME_LIBRARY AND _onnxruntime_library_ext STREQUAL ".lib")
-            add_library(RideShield_onnxruntime SHARED IMPORTED)
-            set_target_properties(RideShield_onnxruntime PROPERTIES
-                IMPORTED_IMPLIB "${ONNXRUNTIME_LIBRARY}"
-                IMPORTED_LOCATION "${ONNXRUNTIME_RUNTIME_LIBRARY}"
-                INTERFACE_INCLUDE_DIRECTORIES "${ONNXRUNTIME_INCLUDE_DIR}"
-            )
+            message(STATUS "[RideShield] ONNX Runtime ${RIDESHIELD_ONNXRUNTIME_VERSION} (prebuilt): ${_ort_lib}")
         else()
-            add_library(RideShield_onnxruntime UNKNOWN IMPORTED)
-            set_target_properties(RideShield_onnxruntime PROPERTIES
-                IMPORTED_LOCATION "${ONNXRUNTIME_LIBRARY}"
-                INTERFACE_INCLUDE_DIRECTORIES "${ONNXRUNTIME_INCLUDE_DIR}"
-            )
+            message(WARNING "[RideShield] Downloaded ORT but could not locate library in ${_ort_libdir}")
         endif()
-        add_library(RideShield::onnxruntime ALIAS RideShield_onnxruntime)
-
-        set(_onnxruntime_runtime_dirs "")
-        set(_onnxruntime_runtime_files "")
-
-        if(ONNXRUNTIME_RUNTIME_LIBRARY)
-            get_filename_component(_onnxruntime_runtime_dir "${ONNXRUNTIME_RUNTIME_LIBRARY}" DIRECTORY)
-            list(APPEND _onnxruntime_runtime_dirs "${_onnxruntime_runtime_dir}")
-            list(APPEND _onnxruntime_runtime_files "${ONNXRUNTIME_RUNTIME_LIBRARY}")
-        elseif(ONNXRUNTIME_LIBRARY)
-            get_filename_component(_onnxruntime_runtime_dir "${ONNXRUNTIME_LIBRARY}" DIRECTORY)
-            list(APPEND _onnxruntime_runtime_dirs "${_onnxruntime_runtime_dir}")
-        endif()
-
-        if(ONNXRUNTIME_PROVIDERS_SHARED)
-            get_filename_component(_onnxruntime_providers_dir "${ONNXRUNTIME_PROVIDERS_SHARED}" DIRECTORY)
-            list(APPEND _onnxruntime_runtime_dirs "${_onnxruntime_providers_dir}")
-            list(APPEND _onnxruntime_runtime_files "${ONNXRUNTIME_PROVIDERS_SHARED}")
-        endif()
-
-        list(REMOVE_DUPLICATES _onnxruntime_runtime_dirs)
-        list(REMOVE_DUPLICATES _onnxruntime_runtime_files)
-        set(RIDESHIELD_ONNXRUNTIME_RUNTIME_DIRS "${_onnxruntime_runtime_dirs}" PARENT_SCOPE)
-        set(RIDESHIELD_ONNXRUNTIME_RUNTIME_FILES "${_onnxruntime_runtime_files}" PARENT_SCOPE)
+    elseif(NOT TARGET RideShield::onnxruntime)
+        message(WARNING "[RideShield] Downloaded ORT but could not locate include/lib at ${_ort_root}")
     endif()
 
     find_package(rclcpp QUIET)
@@ -274,30 +169,18 @@ function(rideshield_resolve_dependencies)
         message(STATUS "[RideShield] OpenCV not detected during configure")
     endif()
 
-    if(TARGET RideShield::onnxruntime)
-        message(STATUS "[RideShield] ONNX Runtime detected: ${ONNXRUNTIME_LIBRARY}")
-    elseif(ONNXRUNTIME_LIBRARY OR ONNXRUNTIME_RUNTIME_LIBRARY OR ONNXRUNTIME_PROVIDERS_SHARED)
-        message(STATUS "[RideShield] ONNX Runtime runtime library detected, but development headers are missing: install libonnxruntime-dev or enable source dependency targets.")
-    else()
-        message(STATUS "[RideShield] ONNX Runtime not detected during configure")
+    if(NOT TARGET RideShield::onnxruntime)
+        message(STATUS "[RideShield] ONNX Runtime not available")
     endif()
 
-    # 提示：如果依赖未找到，且 EP target 存在，说明需要先构建再重新 configure
-    # 如果 EP target 也不存在，建议安装系统包或启用源码构建
     set(_missing_deps "")
     if(NOT OpenCV_FOUND)
         list(APPEND _missing_deps "OpenCV")
     endif()
-    if(NOT TARGET RideShield::onnxruntime)
-        list(APPEND _missing_deps "ONNXRuntime")
-    endif()
     if(_missing_deps)
         list(JOIN _missing_deps ", " _missing_deps_str)
-        if(TARGET opencv_ep OR TARGET onnxruntime_ep)
-            message(STATUS "[RideShield] ${_missing_deps_str} 尚未构建。首次构建后请重新 configure：")
-            message(STATUS "  cmake --build <build_dir>        # 构建 third-party 依赖")
-            message(STATUS "  cmake --preset host-debug        # 重新 configure 以发现已安装的依赖")
-            message(STATUS "  cmake --build <build_dir>        # 重新构建主项目")
+        if(TARGET opencv_ep)
+            message(STATUS "[RideShield] ${_missing_deps_str} 尚未构建。首次构建后请重新 configure。")
         else()
             message(STATUS "[RideShield] ${_missing_deps_str} 未在系统中找到。")
             message(STATUS "  可以安装系统包，或使用 -DRIDESHIELD_ENABLE_SOURCE_DEPENDENCY_TARGETS=ON 从源码构建。")

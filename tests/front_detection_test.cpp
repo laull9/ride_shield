@@ -16,6 +16,11 @@
 #include "RideShield/perception/rear_perception.h"
 #endif
 
+#ifdef RIDESHIELD_HAS_EMBEDDED_MODEL
+extern const unsigned char rideshield_yolo_model_data[];
+extern const unsigned char rideshield_yolo_model_end[];
+#endif
+
 #include <gtest/gtest.h>
 
 #include <array>
@@ -81,13 +86,26 @@ TEST(FusionEngineTest, AllNormalYieldsL0) {
     EXPECT_FALSE(result.should_brake);
 }
 
-TEST(FusionEngineTest, FrontEmergencyTriggersWarning) {
+TEST(FusionEngineTest, FrontEmergencyButFarAwayYieldsLow) {
     decision::FusionEngine engine;
     decision::FusionEngine::Input input{};
     input.front.risk = core::RiskLevel::kEmergency;
+    // TTC 默认 1e9f (极远) → 动态算法应大幅降低前向分
     auto result = engine.evaluate(input);
 
-    // front weight 0.30 * emergency 1.0 = 0.30 → > hint(0.20)
+    // 目标远且无接近趋势 → 不应触发告警
+    EXPECT_EQ(result.overall_risk, core::RiskLevel::kNormal);
+    EXPECT_FALSE(result.should_warn_voice);
+}
+
+TEST(FusionEngineTest, FrontEmergencyWithLowTTCTriggersWarning) {
+    decision::FusionEngine engine;
+    decision::FusionEngine::Input input{};
+    input.front.risk = core::RiskLevel::kEmergency;
+    input.front.ttc_seconds = 2.0f; // TTC 2s → 真正危险
+    auto result = engine.evaluate(input);
+
+    // front weight 0.30 * 1.0 = 0.30 → > hint(0.20)
     EXPECT_GE(static_cast<int>(result.overall_risk), static_cast<int>(core::RiskLevel::kHint));
     EXPECT_TRUE(result.should_warn_voice);
 }
@@ -96,11 +114,12 @@ TEST(FusionEngineTest, MultipleHighRisksEscalate) {
     decision::FusionEngine engine;
     decision::FusionEngine::Input input{};
     input.front.risk = core::RiskLevel::kEmergency;
+    input.front.ttc_seconds = 1.0f; // 真正的紧急 TTC
     input.rear.risk = core::RiskLevel::kEmergency;
     input.driver.risk = core::RiskLevel::kEmergency;
     auto result = engine.evaluate(input);
 
-    // 0.30 + 0.20 + 0.25 = 0.75 → L3
+    // front 0.30*0.9 + rear 0.20 + driver 0.25 = 0.72 → L3
     EXPECT_EQ(result.overall_risk, core::RiskLevel::kEmergency);
     EXPECT_TRUE(result.should_warn_voice);
     EXPECT_TRUE(result.should_warn_vibrate);
@@ -111,6 +130,7 @@ TEST(FusionEngineTest, BrakeBlockedByImuAbnormal) {
     decision::FusionEngine::Input input{};
     // 全部紧急, risk_score 应该很高
     input.front.risk = core::RiskLevel::kEmergency;
+    input.front.ttc_seconds = 0.5f; // 紧急 TTC
     input.rear.risk = core::RiskLevel::kEmergency;
     input.driver.risk = core::RiskLevel::kEmergency;
     input.imu.risk = core::RiskLevel::kEmergency;
@@ -261,44 +281,47 @@ TEST(YoloPreprocessTest, ImageViewAndCvMatGiveSameResult) {
 
 class YoloDetectorTest : public ::testing::Test {
 protected:
-    static std::filesystem::path model_path() {
-        // 从项目根目录查找模型
+    static inference::YoloDetectorConfig make_config(float score_threshold = 0.25f,
+                                                      std::size_t threads = 2) {
+        inference::YoloDetectorConfig cfg{
+            .input_size = 640,
+            .score_threshold = score_threshold,
+            .intra_threads = threads,
+        };
+#ifdef RIDESHIELD_HAS_EMBEDDED_MODEL
+        cfg.model_data = {rideshield_yolo_model_data,
+                          static_cast<std::size_t>(rideshield_yolo_model_end - rideshield_yolo_model_data)};
+#else
         auto p = std::filesystem::path("res/yolo26n.onnx");
-        if (!std::filesystem::exists(p)) {
+        if (!std::filesystem::exists(p))
             p = std::filesystem::path(PROJECT_SOURCE_DIR) / "res" / "yolo26n.onnx";
-        }
-        return p;
+        cfg.model_path = p;
+#endif
+        return cfg;
     }
 
     static bool model_available() {
-        return std::filesystem::exists(model_path());
+#ifdef RIDESHIELD_HAS_EMBEDDED_MODEL
+        return true;
+#else
+        auto p = std::filesystem::path("res/yolo26n.onnx");
+        if (!std::filesystem::exists(p))
+            p = std::filesystem::path(PROJECT_SOURCE_DIR) / "res" / "yolo26n.onnx";
+        return std::filesystem::exists(p);
+#endif
     }
 };
 
 TEST_F(YoloDetectorTest, InitializesWithoutCrash) {
-    if (!model_available()) GTEST_SKIP() << "Model not found: " << model_path();
+    if (!model_available()) GTEST_SKIP() << "Model not available";
 
-    inference::YoloDetectorConfig config{
-        .model_path = model_path(),
-        .input_size = 640,
-        .score_threshold = 0.25f,
-        .intra_threads = 2,
-    };
-
-    EXPECT_NO_THROW(inference::YoloDetector detector(config));
+    EXPECT_NO_THROW(inference::YoloDetector detector(make_config()));
 }
 
 TEST_F(YoloDetectorTest, DetectsBlackImageWithNoTargets) {
-    if (!model_available()) GTEST_SKIP() << "Model not found: " << model_path();
+    if (!model_available()) GTEST_SKIP() << "Model not available";
 
-    inference::YoloDetectorConfig config{
-        .model_path = model_path(),
-        .input_size = 640,
-        .score_threshold = 0.25f,
-        .intra_threads = 2,
-    };
-
-    inference::YoloDetector detector(config);
+    inference::YoloDetector detector(make_config());
 
     cv::Mat black(480, 640, CV_8UC3, cv::Scalar(0, 0, 0));
     auto report = detector.detect(black);
@@ -312,16 +335,9 @@ TEST_F(YoloDetectorTest, DetectsBlackImageWithNoTargets) {
 }
 
 TEST_F(YoloDetectorTest, DetectsOnDifferentSizeImages) {
-    if (!model_available()) GTEST_SKIP() << "Model not found: " << model_path();
+    if (!model_available()) GTEST_SKIP() << "Model not available";
 
-    inference::YoloDetectorConfig config{
-        .model_path = model_path(),
-        .input_size = 640,
-        .score_threshold = 0.25f,
-        .intra_threads = 2,
-    };
-
-    inference::YoloDetector detector(config);
+    inference::YoloDetector detector(make_config());
 
     // 多种不同尺寸的图像应该都能正常处理
     for (auto [w, h] : std::vector<std::pair<int, int>>{{640, 480}, {320, 240}, {1920, 1080}, {100, 100}}) {
@@ -334,16 +350,9 @@ TEST_F(YoloDetectorTest, DetectsOnDifferentSizeImages) {
 }
 
 TEST_F(YoloDetectorTest, DetectionBboxWithinOriginalImageBounds) {
-    if (!model_available()) GTEST_SKIP() << "Model not found: " << model_path();
+    if (!model_available()) GTEST_SKIP() << "Model not available";
 
-    inference::YoloDetectorConfig config{
-        .model_path = model_path(),
-        .input_size = 640,
-        .score_threshold = 0.10f,  // 低阈值更容易产生检测
-        .intra_threads = 2,
-    };
-
-    inference::YoloDetector detector(config);
+    inference::YoloDetector detector(make_config(0.10f));
 
     cv::Mat frame(480, 640, CV_8UC3);
     cv::randu(frame, cv::Scalar(0, 0, 0), cv::Scalar(255, 255, 255));
@@ -361,16 +370,9 @@ TEST_F(YoloDetectorTest, DetectionBboxWithinOriginalImageBounds) {
 }
 
 TEST_F(YoloDetectorTest, ZeroCopyNoExtraCopies) {
-    if (!model_available()) GTEST_SKIP() << "Model not found: " << model_path();
+    if (!model_available()) GTEST_SKIP() << "Model not available";
 
-    inference::YoloDetectorConfig config{
-        .model_path = model_path(),
-        .input_size = 640,
-        .score_threshold = 0.25f,
-        .intra_threads = 2,
-    };
-
-    inference::YoloDetector detector(config);
+    inference::YoloDetector detector(make_config());
 
     // 连续两次推理，验证结果一致
     cv::Mat frame(480, 640, CV_8UC3, cv::Scalar(64, 128, 192));
@@ -385,16 +387,9 @@ TEST_F(YoloDetectorTest, ZeroCopyNoExtraCopies) {
 // ============================================================
 
 TEST_F(YoloDetectorTest, FrontPerceptionIntegration) {
-    if (!model_available()) GTEST_SKIP() << "Model not found: " << model_path();
+    if (!model_available()) GTEST_SKIP() << "Model not available";
 
-    inference::YoloDetectorConfig config{
-        .model_path = model_path(),
-        .input_size = 640,
-        .score_threshold = 0.25f,
-        .intra_threads = 2,
-    };
-
-    perception::FrontPerception front(config);
+    perception::FrontPerception front(make_config());
 
     cv::Mat frame(480, 640, CV_8UC3, cv::Scalar(0, 0, 0));
     auto result = front.process(frame);
@@ -410,16 +405,9 @@ TEST_F(YoloDetectorTest, FrontPerceptionIntegration) {
 // ============================================================
 
 TEST_F(YoloDetectorTest, RearPerceptionIntegration) {
-    if (!model_available()) GTEST_SKIP() << "Model not found: " << model_path();
+    if (!model_available()) GTEST_SKIP() << "Model not available";
 
-    inference::YoloDetectorConfig config{
-        .model_path = model_path(),
-        .input_size = 640,
-        .score_threshold = 0.30f,
-        .intra_threads = 2,
-    };
-
-    perception::RearPerception rear(config);
+    perception::RearPerception rear(make_config(0.30f));
 
     cv::Mat frame(480, 640, CV_8UC3, cv::Scalar(0, 0, 0));
     auto result = rear.process(frame);
@@ -433,25 +421,13 @@ TEST_F(YoloDetectorTest, RearPerceptionIntegration) {
 // ============================================================
 
 TEST_F(YoloDetectorTest, FullPipelineIntegration) {
-    if (!model_available()) GTEST_SKIP() << "Model not found: " << model_path();
+    if (!model_available()) GTEST_SKIP() << "Model not available";
 
     // 前向
-    inference::YoloDetectorConfig front_config{
-        .model_path = model_path(),
-        .input_size = 640,
-        .score_threshold = 0.25f,
-        .intra_threads = 2,
-    };
-    perception::FrontPerception front(front_config);
+    perception::FrontPerception front(make_config());
 
     // 后向
-    inference::YoloDetectorConfig rear_config{
-        .model_path = model_path(),
-        .input_size = 640,
-        .score_threshold = 0.30f,
-        .intra_threads = 2,
-    };
-    perception::RearPerception rear(rear_config);
+    perception::RearPerception rear(make_config(0.30f));
 
     // 融合
     decision::FusionEngine fusion;

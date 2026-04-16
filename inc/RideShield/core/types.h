@@ -42,6 +42,16 @@ enum class RiskLevel {
     kEmergency, // L3 紧急
 };
 
+// ---------- 运动趋势 ----------
+
+enum class MotionTrend {
+    kUnknown,      // 首帧/无法判断
+    kReceding,     // 远离
+    kStationary,   // 静止
+    kApproaching,  // 接近 (低速)
+    kClosingFast,  // 快速接近
+};
+
 // ---------- 后向区域 ----------
 
 enum class RearZone {
@@ -55,7 +65,10 @@ enum class RearZone {
 struct FrontPerceptionResult {
     DetectionReport report;
     RiskLevel risk{RiskLevel::kNormal};
-    float ttc_seconds{1e9f}; // 碰撞时间估计 (seconds), 初值极大表示安全
+    float ttc_seconds{1e9f};            // 碰撞时间估计 (seconds), 初值极大表示安全
+    float approach_rate{0.f};           // bbox 底边增长率 (ratio/s), >0=接近
+    MotionTrend motion{MotionTrend::kUnknown};
+    float closest_distance_ratio{0.f};  // 最近目标的 bottom_ratio
 };
 
 struct RearPerceptionResult {
