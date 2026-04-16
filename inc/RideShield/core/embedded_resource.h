@@ -5,7 +5,8 @@
 
 namespace RideShield {
 
-/// 访问通过 rideshield_embed_resource() 嵌入的二进制资源。
+/// 兼容旧的静态资源 span 帮助函数。
+/// 新代码请直接包含 resources.h 并使用 RideShield::resources 下的访问器。
 /// @tparam symbol_data  外部符号 xxx_data（由汇编 .incbin 生成）
 /// @tparam symbol_end   外部符号 xxx_end
 ///

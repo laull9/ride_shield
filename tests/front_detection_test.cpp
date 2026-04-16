@@ -1,3 +1,5 @@
+#include "resources.h"
+
 #include "RideShield/core/types.h"
 #include "RideShield/core/image_view.h"
 #include "RideShield/core/tensor_view.h"
@@ -16,16 +18,7 @@
 #include "RideShield/perception/rear_perception.h"
 #endif
 
-#ifdef RIDESHIELD_HAS_EMBEDDED_MODEL
-extern const unsigned char rideshield_yolo_model_data[];
-extern const unsigned char rideshield_yolo_model_end[];
-#endif
-
 #include <gtest/gtest.h>
-
-#include <array>
-#include <cmath>
-#include <filesystem>
 
 using namespace RideShield;
 
@@ -288,27 +281,12 @@ protected:
             .score_threshold = score_threshold,
             .intra_threads = threads,
         };
-#ifdef RIDESHIELD_HAS_EMBEDDED_MODEL
-        cfg.model_data = {rideshield_yolo_model_data,
-                          static_cast<std::size_t>(rideshield_yolo_model_end - rideshield_yolo_model_data)};
-#else
-        auto p = std::filesystem::path("res/yolo26n.onnx");
-        if (!std::filesystem::exists(p))
-            p = std::filesystem::path(PROJECT_SOURCE_DIR) / "res" / "yolo26n.onnx";
-        cfg.model_path = p;
-#endif
+        cfg.model_data = RideShield::resources::resource_yolo26n_onnx();
         return cfg;
     }
 
     static bool model_available() {
-#ifdef RIDESHIELD_HAS_EMBEDDED_MODEL
-        return true;
-#else
-        auto p = std::filesystem::path("res/yolo26n.onnx");
-        if (!std::filesystem::exists(p))
-            p = std::filesystem::path(PROJECT_SOURCE_DIR) / "res" / "yolo26n.onnx";
-        return std::filesystem::exists(p);
-#endif
+        return !RideShield::resources::resource_yolo26n_onnx().empty();
     }
 };
 

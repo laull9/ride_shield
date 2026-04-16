@@ -1,5 +1,7 @@
 #include "main.h"
 
+#include "resources.h"
+
 #include "RideShield/core/image_view.h"
 #include "RideShield/core/tensor_view.h"
 #include "RideShield/core/types.h"
@@ -9,11 +11,6 @@
 #include "RideShield/inference/yolo_detector.h"
 #include "RideShield/perception/front_perception.h"
 #include "RideShield/perception/rear_perception.h"
-#endif
-
-#ifdef RIDESHIELD_HAS_EMBEDDED_MODEL
-extern const unsigned char rideshield_yolo_model_data[];
-extern const unsigned char rideshield_yolo_model_end[];
 #endif
 
 #ifdef RIDESHIELD_HAS_OPENCV
@@ -32,9 +29,7 @@ extern const unsigned char rideshield_yolo_model_end[];
 #include <fmt/core.h>
 
 #include <array>
-#include <cstdlib>
 #include <cstring>
-#include <filesystem>
 #include <span>
 #include <vector>
 
@@ -110,19 +105,7 @@ int runUi(int argc, char* argv[]) {
             .score_threshold = 0.25f,
             .intra_threads = 4,
         };
-#ifdef RIDESHIELD_HAS_EMBEDDED_MODEL
-        cfg.model_data = {rideshield_yolo_model_data,
-                          static_cast<std::size_t>(rideshield_yolo_model_end - rideshield_yolo_model_data)};
-#else
-        std::filesystem::path model_path = "res/yolo26n.onnx";
-        for (int i = 1; i < argc; ++i)
-            if (std::strncmp(argv[i], "--", 2) != 0) { model_path = argv[i]; break; }
-        if (!std::filesystem::exists(model_path)) {
-            fmt::print("[RideShield UI] 模型 {} 不存在, 前向感知不可用\n", model_path.string());
-            return;
-        }
-        cfg.model_path = model_path;
-#endif
+        cfg.model_data = RideShield::resources::resource_yolo26n_onnx();
         try {
             front = std::make_unique<RideShield::perception::FrontPerception>(cfg);
             cap   = std::make_unique<cv::VideoCapture>(0);
@@ -198,33 +181,14 @@ int runHeadless(int argc, char* argv[]) {
         .intra_threads = 4,
     };
 
-#ifdef RIDESHIELD_HAS_EMBEDDED_MODEL
-    auto model_span = std::span<const unsigned char>{
-        rideshield_yolo_model_data,
-        static_cast<std::size_t>(rideshield_yolo_model_end - rideshield_yolo_model_data)};
+    auto model_span = RideShield::resources::resource_yolo26n_onnx();
     front_config.model_data = model_span;
     rear_config.model_data  = model_span;
     fmt::print("[RideShield] 使用嵌入式 ONNX 模型 ({} bytes)\n", model_span.size());
-#else
-    std::filesystem::path model_path = "res/yolo26n.onnx";
 
-    // 收集非 -- 开头的位置参数
     std::vector<std::string> pos_args;
     for (int i = 1; i < argc; ++i)
         if (std::strncmp(argv[i], "--", 2) != 0) pos_args.emplace_back(argv[i]);
-
-    if (!pos_args.empty()) {
-        model_path = pos_args[0];
-    }
-
-    if (!std::filesystem::exists(model_path)) {
-        fmt::print("[RideShield] 模型文件不存在: {}\n", model_path.string());
-        fmt::print("[RideShield] 用法: {} [model.onnx] [image_or_video]\n", argv[0]);
-        return 0;
-    }
-    front_config.model_path = model_path;
-    rear_config.model_path  = model_path;
-#endif
 
     RideShield::perception::FrontPerception front_perception(front_config);
     fmt::print("[RideShield] 前向感知模块已初始化\n");
@@ -233,16 +197,8 @@ int runHeadless(int argc, char* argv[]) {
     fmt::print("[RideShield] 后向感知模块已初始化\n");
 
     // 如果提供了图像或视频路径，执行检测演示
-#ifndef RIDESHIELD_HAS_EMBEDDED_MODEL
-    if (pos_args.size() > 1) {
-        std::string input_path = pos_args[1];
-#else
-    std::vector<std::string> pos_args;
-    for (int i = 1; i < argc; ++i)
-        if (std::strncmp(argv[i], "--", 2) != 0) pos_args.emplace_back(argv[i]);
     if (!pos_args.empty()) {
         std::string input_path = pos_args[0];
-#endif
         cv::Mat frame = cv::imread(input_path);
 
         if (frame.empty()) {

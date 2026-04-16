@@ -47,6 +47,19 @@ function(rideshield_resolve_dependencies)
     set(RIDESHIELD_ONNXRUNTIME_RUNTIME_DIRS "" PARENT_SCOPE)
     set(RIDESHIELD_ONNXRUNTIME_RUNTIME_FILES "" PARENT_SCOPE)
 
+    if(NOT COMMAND b_embed)
+        set(B_EMBED_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+        set(B_EMBED_SILENCE_DEVMODE_WARNING ON CACHE BOOL "" FORCE)
+        set(B_PRODUCTION_MODE ON CACHE BOOL "" FORCE)
+        FetchContent_Declare(
+            battery-embed
+            GIT_REPOSITORY https://github.com/batterycenter/embed.git
+            GIT_TAG v1.2.19
+            GIT_SHALLOW ON
+        )
+        FetchContent_MakeAvailable(battery-embed)
+    endif()
+
     _rideshield_prepend_prefix_if_exists("${RIDESHIELD_THIRD_PARTY_INSTALL_DIR}/opencv")
 
     find_package(fmt QUIET)

@@ -3,6 +3,8 @@
 /// 并在画面上绘制 bounding box + 标签 + 风险等级。
 /// 按 ESC / q 退出。
 
+#include "resources.h"
+
 #include "RideShield/core/types.h"
 #include "RideShield/inference/coco_labels.h"
 
@@ -11,11 +13,6 @@
 #include "RideShield/perception/front_perception.h"
 #include "RideShield/inference/yolo_detector.h"
 
-#ifdef RIDESHIELD_HAS_EMBEDDED_MODEL
-extern const unsigned char rideshield_yolo_model_data[];
-extern const unsigned char rideshield_yolo_model_end[];
-#endif
-
 #include <opencv2/core.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
@@ -23,7 +20,6 @@ extern const unsigned char rideshield_yolo_model_end[];
 
 #include <gtest/gtest.h>
 
-#include <filesystem>
 #include <fmt/core.h>
 #include <string>
 
@@ -134,27 +130,12 @@ protected:
             .score_threshold = score_threshold,
             .intra_threads = threads,
         };
-#ifdef RIDESHIELD_HAS_EMBEDDED_MODEL
-        cfg.model_data = {rideshield_yolo_model_data,
-                          static_cast<std::size_t>(rideshield_yolo_model_end - rideshield_yolo_model_data)};
-#else
-        auto p = std::filesystem::path("res/yolo26n.onnx");
-        if (!std::filesystem::exists(p))
-            p = std::filesystem::path(PROJECT_SOURCE_DIR) / "res" / "yolo26n.onnx";
-        cfg.model_path = p;
-#endif
+        cfg.model_data = RideShield::resources::resource_yolo26n_onnx();
         return cfg;
     }
 
     static bool model_available() {
-#ifdef RIDESHIELD_HAS_EMBEDDED_MODEL
-        return true;
-#else
-        auto p = std::filesystem::path("res/yolo26n.onnx");
-        if (!std::filesystem::exists(p))
-            p = std::filesystem::path(PROJECT_SOURCE_DIR) / "res" / "yolo26n.onnx";
-        return std::filesystem::exists(p);
-#endif
+        return !RideShield::resources::resource_yolo26n_onnx().empty();
     }
 };
 

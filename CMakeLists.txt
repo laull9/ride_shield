@@ -6,7 +6,7 @@ option(USE_STATIC "Link libstdc++/libgcc statically when possible" ON)
 option(RIDESHIELD_ENABLE_SOURCE_DEPENDENCY_TARGETS "Create source-fetch and superbuild targets for third-party dependencies" OFF)
 option(RIDESHIELD_ENABLE_UI "Build Qt6 Quick car HMI (requires Qt6 Quick)" ON)
 
-project(${PROJECT_NAME} LANGUAGES C CXX ASM)
+project(${PROJECT_NAME} LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_C_STANDARD 23)
@@ -80,9 +80,49 @@ list(FILTER SRC_SOURCES EXCLUDE REGEX ".*/ui/.*\\.cpp$")
 
 add_library(${PROJECT_TARGET_LIB} ${SRC_SOURCES})
 
+set(RIDESHIELD_GENERATED_INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+file(MAKE_DIRECTORY "${RIDESHIELD_GENERATED_INCLUDE_DIR}")
+
+file(GLOB_RECURSE RIDESHIELD_RESOURCE_CANDIDATES RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" CONFIGURE_DEPENDS "res/*")
+set(RIDESHIELD_RESOURCE_FILES)
+foreach(RIDESHIELD_RESOURCE_CANDIDATE IN LISTS RIDESHIELD_RESOURCE_CANDIDATES)
+    if(IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/${RIDESHIELD_RESOURCE_CANDIDATE}")
+        continue()
+    endif()
+    list(APPEND RIDESHIELD_RESOURCE_FILES "${RIDESHIELD_RESOURCE_CANDIDATE}")
+endforeach()
+list(SORT RIDESHIELD_RESOURCE_FILES)
+
+set(RIDESHIELD_RESOURCE_FIND_SNIPPET "")
+set(RIDESHIELD_RESOURCE_ACCESSOR_SNIPPET "")
+
+foreach(RIDESHIELD_RESOURCE_FILE IN LISTS RIDESHIELD_RESOURCE_FILES)
+    b_embed(${PROJECT_TARGET_LIB} "${RIDESHIELD_RESOURCE_FILE}")
+
+    string(REGEX REPLACE "^res/" "" RIDESHIELD_RESOURCE_NAME "${RIDESHIELD_RESOURCE_FILE}")
+    string(TOLOWER "${RIDESHIELD_RESOURCE_NAME}" RIDESHIELD_RESOURCE_NAME)
+    string(REGEX REPLACE "[^a-z0-9]+" "_" RIDESHIELD_RESOURCE_NAME "${RIDESHIELD_RESOURCE_NAME}")
+    string(REGEX REPLACE "^_+|_+$" "" RIDESHIELD_RESOURCE_NAME "${RIDESHIELD_RESOURCE_NAME}")
+    set(RIDESHIELD_RESOURCE_FUNCTION "resource_${RIDESHIELD_RESOURCE_NAME}")
+
+    string(APPEND RIDESHIELD_RESOURCE_FIND_SNIPPET
+        "    if (resource_path == \"${RIDESHIELD_RESOURCE_FILE}\") {\n"
+        "        return detail::make_span(b::embed<\"${RIDESHIELD_RESOURCE_FILE}\">());\n"
+        "    }\n")
+
+    string(APPEND RIDESHIELD_RESOURCE_ACCESSOR_SNIPPET
+        "inline auto ${RIDESHIELD_RESOURCE_FUNCTION}() noexcept -> ResourceSpan {\n"
+        "    return detail::make_span(b::embed<\"${RIDESHIELD_RESOURCE_FILE}\">());\n"
+        "}\n\n")
+endforeach()
+
+file(WRITE "${RIDESHIELD_GENERATED_INCLUDE_DIR}/rideshield_resources_find.inc" "${RIDESHIELD_RESOURCE_FIND_SNIPPET}")
+file(WRITE "${RIDESHIELD_GENERATED_INCLUDE_DIR}/rideshield_resources_accessors.inc" "${RIDESHIELD_RESOURCE_ACCESSOR_SNIPPET}")
+
 target_include_directories(${PROJECT_TARGET_LIB} PUBLIC
     ${PROJECT_SOURCE_DIR}/inc
     ${PROJECT_SOURCE_DIR}/resource
+    ${RIDESHIELD_GENERATED_INCLUDE_DIR}
 )
 
 target_compile_features(${PROJECT_TARGET_LIB} PUBLIC cxx_std_23)
@@ -105,13 +145,8 @@ if(RIDESHIELD_HAS_ROS2)
     target_compile_definitions(${PROJECT_TARGET_LIB} PUBLIC RIDESHIELD_HAS_ROS2=1)
 endif()
 
-# ── 嵌入 ONNX 模型到二进制 ──
-if(TARGET RideShield::onnxruntime)
-    include(EmbedResource)
-    rideshield_embed_resource(${PROJECT_TARGET_LIB}
-        rideshield_yolo_model "${CMAKE_CURRENT_SOURCE_DIR}/res/yolo26n.onnx"
-    )
-    target_compile_definitions(${PROJECT_TARGET_LIB} PUBLIC RIDESHIELD_HAS_EMBEDDED_MODEL=1)
+if(RIDESHIELD_RESOURCE_FILES)
+    target_compile_definitions(${PROJECT_TARGET_LIB} PUBLIC RIDESHIELD_HAS_EMBEDDED_RESOURCES=1)
 endif()
 
 if(NO_TERMINAL AND WIN32)
