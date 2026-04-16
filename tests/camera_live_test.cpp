@@ -20,8 +20,20 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
+#include <cstdlib>
+#include <filesystem>
 #include <fmt/core.h>
 #include <string>
+
+
+// 测试视频路径
+const auto TestVideoPath = 
+    std::filesystem::path(PROJECT_SOURCE_DIR) 
+    / "res_test" 
+    / "test1.mp4"
+    ;
+
 
 using namespace RideShield;
 
@@ -115,6 +127,21 @@ void draw_hud(cv::Mat& frame,
         cv::FONT_HERSHEY_SIMPLEX, 0.65, color, 2);
 }
 
+void draw_playback_status(cv::Mat& frame,
+                          double video_seconds,
+                          int displayed_frames,
+                          int dropped_frames) {
+    cv::rectangle(frame, cv::Point(0, 36), cv::Point(frame.cols, 68), cv::Scalar(0, 0, 0), cv::FILLED);
+
+    auto status = fmt::format("Video: {:.1f}s  Displayed: {}  Dropped: {}",
+        video_seconds,
+        displayed_frames,
+        dropped_frames);
+
+    cv::putText(frame, status, cv::Point(8, 59),
+        cv::FONT_HERSHEY_SIMPLEX, 0.55, cv::Scalar(220, 220, 220), 1);
+}
+
 }  // namespace
 
 // ============================================================
@@ -137,6 +164,15 @@ protected:
     static bool model_available() {
         return !RideShield::resources::resource_yolo26n_onnx().empty();
     }
+
+    static auto make_perception_config() -> perception::FrontPerception::Config {
+        return {
+            .ttc_warn_seconds = 2.0f,
+            .ttc_emergency_seconds = 1.0f,
+            .near_bbox_ratio = 0.65f,
+            .danger_bbox_ratio = 0.85f,
+        };
+    }
 };
 
 /// 打开设备默认摄像头，实时推理并标注
@@ -157,12 +193,7 @@ TEST_F(CameraLiveTest, FrontCameraRealtimeAnnotation) {
 
     // 放宽风险阈值：bbox 底边需要更靠近画面底部才触发预警
     // 避免远处行人/车辆被误判为高风险
-    perception::FrontPerception::Config perception_config{
-        .ttc_warn_seconds      = 2.0f,
-        .ttc_emergency_seconds = 1.0f,
-        .near_bbox_ratio       = 0.65f,  // bbox 底边 > 65% 才视为较近
-        .danger_bbox_ratio     = 0.85f,  // bbox 底边 > 85% 才视为危险
-    };
+    auto perception_config = make_perception_config();
 
     perception::FrontPerception front(detector_config, perception_config);
 
@@ -224,12 +255,7 @@ TEST_F(CameraLiveTest, CustomCameraIndex) {
 
     inference::YoloDetectorConfig detector_config = make_config();
 
-    perception::FrontPerception::Config perception_config{
-        .ttc_warn_seconds      = 2.0f,
-        .ttc_emergency_seconds = 1.0f,
-        .near_bbox_ratio       = 0.65f,
-        .danger_bbox_ratio     = 0.85f,
-    };
+    auto perception_config = make_perception_config();
 
     perception::FrontPerception front(detector_config, perception_config);
 
@@ -285,6 +311,106 @@ TEST_F(CameraLiveTest, CameraGrabSingleFrame) {
         result.report.inference_ms);
 
     cap.release();
+}
+
+/// 播放测试视频并实时显示逐帧标注结果，必要时主动丢帧以保持时间轴对齐。
+TEST_F(CameraLiveTest, TestVideoRealtimeAnnotation) {
+    if (!model_available()) GTEST_SKIP() << "Model not available";
+
+    if (!std::filesystem::exists(TestVideoPath)) {
+        GTEST_SKIP() << "Test video not found: " << TestVideoPath.string();
+    }
+
+    cv::VideoCapture cap(TestVideoPath.string());
+    if (!cap.isOpened()) {
+        GTEST_SKIP() << "Cannot open test video: " << TestVideoPath.string();
+    }
+
+    double fps = cap.get(cv::CAP_PROP_FPS);
+    if (fps <= 1.0) {
+        fps = 30.0;
+    }
+    const double frame_duration_ms = 1000.0 / fps;
+
+    perception::FrontPerception front(make_config(), make_perception_config());
+
+    const std::string window_name = "RideShield - Test Video Realtime";
+    cv::namedWindow(window_name, cv::WINDOW_AUTOSIZE);
+
+    fmt::println("=== 测试视频实时标注 ===");
+    fmt::println("视频: {}", TestVideoPath.string());
+    fmt::println("按 ESC 或 q 跳过退出");
+
+    const auto playback_start = std::chrono::steady_clock::now();
+    std::size_t next_frame_index = 0;
+    int displayed_frames = 0;
+    int dropped_frames = 0;
+    bool skipped_by_user = false;
+    bool end_of_stream = false;
+
+    while (true) {
+        cv::Mat frame;
+        if (!cap.read(frame) || frame.empty()) {
+            break;
+        }
+
+        const double frame_timestamp_ms = static_cast<double>(next_frame_index) * frame_duration_ms;
+        ++next_frame_index;
+
+        auto result = front.process(frame);
+
+        draw_detections(frame, result.report);
+        draw_hud(frame, result.risk, result.ttc_seconds,
+                 result.report.inference_ms,
+                 static_cast<int>(result.report.detections.size()));
+        draw_playback_status(frame,
+                             frame_timestamp_ms / 1000.0,
+                             displayed_frames + 1,
+                             dropped_frames);
+
+        cv::imshow(window_name, frame);
+        ++displayed_frames;
+
+        const double next_frame_timestamp_ms = static_cast<double>(next_frame_index) * frame_duration_ms;
+        const auto after_infer = std::chrono::steady_clock::now();
+        const double elapsed_ms = std::chrono::duration<double, std::milli>(after_infer - playback_start).count();
+        const double remaining_ms = next_frame_timestamp_ms - elapsed_ms;
+
+        const int key = cv::waitKey(remaining_ms > 1.0 ? static_cast<int>(remaining_ms) : 1) & 0xFF;
+        if (key == 27 || key == 'q' || key == 'Q') {
+            skipped_by_user = true;
+            break;
+        }
+
+        const auto after_wait = std::chrono::steady_clock::now();
+        const double synced_elapsed_ms = std::chrono::duration<double, std::milli>(after_wait - playback_start).count();
+        while (static_cast<double>(next_frame_index) * frame_duration_ms < synced_elapsed_ms) {
+            cv::Mat dropped;
+            if (!cap.read(dropped) || dropped.empty()) {
+                end_of_stream = true;
+                break;
+            }
+            ++next_frame_index;
+            ++dropped_frames;
+        }
+
+        if (end_of_stream) {
+            break;
+        }
+    }
+
+    cap.release();
+    cv::destroyAllWindows();
+
+    if (skipped_by_user) {
+        GTEST_SKIP() << "User skipped video playback";
+    }
+
+    fmt::println("视频回放完成: 显示 {} 帧, 丢弃 {} 帧, fps={:.2f}",
+        displayed_frames,
+        dropped_frames,
+        fps);
+    EXPECT_GT(displayed_frames, 0);
 }
 
 #else
