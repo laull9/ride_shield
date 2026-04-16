@@ -1,0 +1,6 @@
+{
+  "cmake.copyCompileCommands": "${workspaceFolder}/compile_commands.json",
+  "clangd.arguments": [
+    "--compile-commands-dir=${workspaceFolder}/build/host-debug"
+  ]
+}

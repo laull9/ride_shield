@@ -12,7 +12,8 @@
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/host-debug",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug"
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       }
     },
     {
@@ -55,6 +56,7 @@
       "binaryDir": "${sourceDir}/build/rk3588-arm64-release",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchains/rk3588-aarch64.cmake",
         "RIDESHIELD_TARGET_ARCH": "arm64",
         "RIDESHIELD_ENABLE_SOURCE_DEPENDENCY_TARGETS": "ON"

@@ -11,6 +11,8 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_C_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(ThirdPartySources)
@@ -108,39 +110,58 @@ add_executable(${PROJECT_NAME} main.cpp)
 target_link_libraries(${PROJECT_NAME} PRIVATE ${PROJECT_TARGET_LIB})
 rideshield_configure_runtime_support(${PROJECT_NAME})
 
-enable_testing()
+include(CTest)
 
-include(FetchContent)
-FetchContent_Declare(
-    googletest
-    GIT_REPOSITORY https://github.com/google/googletest.git
-    GIT_TAG v1.14.0
-    GIT_SHALLOW ON
-)
-set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(googletest)
-
-file(GLOB TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp")
-
-foreach(TEST_FILE ${TEST_SOURCES})
-    get_filename_component(TEST_NAME ${TEST_FILE} NAME_WE)
-
-    add_executable(${TEST_NAME} ${TEST_FILE})
-
-    # 测试链接项目库
-    target_link_libraries(${TEST_NAME}
-        PRIVATE
-            ${PROJECT_TARGET_LIB}
-            GTest::gtest_main
+if(BUILD_TESTING)
+    include(FetchContent)
+    FetchContent_Declare(
+        googletest
+        GIT_REPOSITORY https://github.com/google/googletest.git
+        GIT_TAG v1.14.0
+        GIT_SHALLOW ON
     )
+    set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(googletest)
 
-    target_compile_features(${TEST_NAME} PRIVATE cxx_std_23)
-    target_compile_definitions(${TEST_NAME} PRIVATE PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
-    if((ONNXRUNTIME_LIBRARY OR ONNXRUNTIME_RUNTIME_LIBRARY OR ONNXRUNTIME_PROVIDERS_SHARED) AND NOT TARGET RideShield::onnxruntime)
-        target_compile_definitions(${TEST_NAME} PRIVATE RIDESHIELD_ONNXRUNTIME_RUNTIME_ONLY=1)
+    file(GLOB TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp")
+    set(RIDESHIELD_TEST_TARGETS)
+
+    foreach(TEST_FILE ${TEST_SOURCES})
+        get_filename_component(TEST_NAME ${TEST_FILE} NAME_WE)
+
+        add_executable(${TEST_NAME} ${TEST_FILE})
+
+        target_link_libraries(${TEST_NAME}
+            PRIVATE
+                ${PROJECT_TARGET_LIB}
+                GTest::gtest_main
+        )
+
+        target_compile_features(${TEST_NAME} PRIVATE cxx_std_23)
+        target_compile_definitions(${TEST_NAME} PRIVATE PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+        if((ONNXRUNTIME_LIBRARY OR ONNXRUNTIME_RUNTIME_LIBRARY OR ONNXRUNTIME_PROVIDERS_SHARED) AND NOT TARGET RideShield::onnxruntime)
+            target_compile_definitions(${TEST_NAME} PRIVATE RIDESHIELD_ONNXRUNTIME_RUNTIME_ONLY=1)
+        endif()
+        rideshield_configure_runtime_support(${TEST_NAME})
+
+        list(APPEND RIDESHIELD_TEST_TARGETS ${TEST_NAME})
+
+        add_test(NAME ${TEST_NAME} COMMAND $<TARGET_FILE:${TEST_NAME}>)
+        set_tests_properties(${TEST_NAME} PROPERTIES FIXTURES_REQUIRED rideshield_test_binaries)
+    endforeach()
+
+    if(RIDESHIELD_TEST_TARGETS)
+        add_custom_target(rideshield_tests DEPENDS ${RIDESHIELD_TEST_TARGETS})
+
+        add_test(
+            NAME __rideshield_build_test_binaries
+            COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target rideshield_tests --config $<CONFIG>
+        )
+        set_tests_properties(__rideshield_build_test_binaries PROPERTIES
+            FIXTURES_SETUP rideshield_test_binaries
+            LABELS internal
+            RUN_SERIAL TRUE
+        )
     endif()
-    rideshield_configure_runtime_support(${TEST_NAME})
-
-    add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME})
-endforeach()
+endif()
 
