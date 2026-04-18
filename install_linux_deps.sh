@@ -21,6 +21,20 @@ have_command() {
     command -v "$1" >/dev/null 2>&1
 }
 
+current_ubuntu_codename() {
+    if [[ ! -r /etc/os-release ]]; then
+        return 1
+    fi
+
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    if [[ "${ID:-}" != "ubuntu" || -z "${VERSION_CODENAME:-}" ]]; then
+        return 1
+    fi
+
+    printf '%s\n' "${VERSION_CODENAME}"
+}
+
 version_ge() {
     local lhs="$1"
     local rhs="$2"
@@ -44,6 +58,89 @@ run_as_root() {
 
 apt_has_package() {
     apt-cache show "$1" >/dev/null 2>&1
+}
+
+check_apt_source_consistency() {
+    if [[ "${RIDESHIELD_SKIP_APT_SOURCE_CHECK:-0}" == "1" ]]; then
+        return
+    fi
+
+    local current_codename
+    if ! current_codename="$(current_ubuntu_codename)"; then
+        return
+    fi
+
+    local mismatches=()
+    local wrong_arm64=()
+    local file enabled uris architectures line suite base_suite
+
+    shopt -s nullglob
+    for file in /etc/apt/sources.list.d/*.sources; do
+        enabled=1
+        uris=""
+        architectures=""
+
+        while IFS= read -r line || [[ -n "${line}" ]]; do
+            case "${line}" in
+                Enabled:*)
+                    if [[ "${line#Enabled: }" == "no" ]]; then
+                        enabled=0
+                    fi
+                    ;;
+                URIs:*)
+                    uris="${line#URIs: }"
+                    ;;
+                Architectures:*)
+                    architectures="${line#Architectures: }"
+                    ;;
+                Suites:*)
+                    if [[ ${enabled} -eq 0 ]]; then
+                        continue
+                    fi
+
+                    for suite in ${line#Suites: }; do
+                        base_suite="${suite%%-*}"
+
+                        if [[ "${uris}" == *ubuntu* || "${uris}" == *launchpadcontent.net* ]]; then
+                            if [[ "${base_suite}" != "${current_codename}" ]]; then
+                                mismatches+=("${file}: ${suite} (${uris})")
+                            fi
+                        fi
+                    done
+                    ;;
+            esac
+        done < "${file}"
+
+        if [[ ${enabled} -eq 1 ]] && [[ " ${architectures} " == *" arm64 "* ]]; then
+            if [[ "${uris}" == *archive.ubuntu.com/ubuntu* || "${uris}" == *security.ubuntu.com/ubuntu* ]]; then
+                wrong_arm64+=("${file}: arm64 should use http://ports.ubuntu.com/ubuntu-ports/ instead of ${uris}")
+            fi
+        fi
+    done
+    shopt -u nullglob
+
+    if [[ ${#mismatches[@]} -eq 0 && ${#wrong_arm64[@]} -eq 0 ]]; then
+        return
+    fi
+
+    warn "Detected inconsistent apt source configuration for Ubuntu ${current_codename}."
+
+    if [[ ${#mismatches[@]} -gt 0 ]]; then
+        warn "Enabled Ubuntu or Launchpad sources whose suite does not match ${current_codename}:"
+        printf '  %s\n' "${mismatches[@]}" >&2
+    fi
+
+    if [[ ${#wrong_arm64[@]} -gt 0 ]]; then
+        warn "Detected arm64 Ubuntu entries that do not use ubuntu-ports:"
+        printf '  %s\n' "${wrong_arm64[@]}" >&2
+    fi
+
+    warn "Expected Ubuntu sources for this machine should use suites based on ${current_codename}."
+    warn "For Ubuntu main archives, amd64/i386 should use archive.ubuntu.com + security.ubuntu.com, and arm64 should use ports.ubuntu.com/ubuntu-ports."
+    warn "Disable or rename any enabled '*-noble.sources' PPAs on a ${current_codename} system before retrying."
+    warn "Fix the apt sources before running this installer."
+    warn "Set RIDESHIELD_SKIP_APT_SOURCE_CHECK=1 only if you have intentionally configured mixed sources."
+    exit 1
 }
 
 dnf_has_package() {
@@ -91,6 +188,7 @@ warn_ros2_unavailable() {
 
 install_with_apt() {
     require_sudo
+    check_apt_source_consistency
 
     local packages=(
         build-essential

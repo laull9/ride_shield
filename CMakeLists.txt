@@ -49,6 +49,16 @@ function(rideshield_configure_runtime_support target_name)
     endif()
 endfunction()
 
+function(rideshield_attach_embedded_resource_anchor target_name)
+    if(NOT TARGET ${target_name})
+        return()
+    endif()
+
+    if(RIDESHIELD_RESOURCE_FILES)
+        target_sources(${target_name} PRIVATE "${RIDESHIELD_RESOURCE_ANCHOR_SOURCE}")
+    endif()
+endfunction()
+
 if(USE_STATIC)
     if(MSVC)
         set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -94,7 +104,12 @@ endforeach()
 list(SORT RIDESHIELD_RESOURCE_FILES)
 
 set(RIDESHIELD_RESOURCE_FIND_SNIPPET "")
-set(RIDESHIELD_RESOURCE_ACCESSOR_SNIPPET "")
+string(CONCAT RIDESHIELD_RESOURCE_ANCHOR_SNIPPET
+    "#include <cstddef>\n"
+    "#include \"resources.h\"\n\n"
+    "namespace {\n"
+    "[[maybe_unused]] const std::size_t rideshield_embedded_resource_anchor = []() noexcept {\n"
+    "    std::size_t embedded_resource_total = 0;\n")
 
 foreach(RIDESHIELD_RESOURCE_FILE IN LISTS RIDESHIELD_RESOURCE_FILES)
     b_embed(${PROJECT_TARGET_LIB} "${RIDESHIELD_RESOURCE_FILE}")
@@ -103,21 +118,40 @@ foreach(RIDESHIELD_RESOURCE_FILE IN LISTS RIDESHIELD_RESOURCE_FILES)
     string(TOLOWER "${RIDESHIELD_RESOURCE_NAME}" RIDESHIELD_RESOURCE_NAME)
     string(REGEX REPLACE "[^a-z0-9]+" "_" RIDESHIELD_RESOURCE_NAME "${RIDESHIELD_RESOURCE_NAME}")
     string(REGEX REPLACE "^_+|_+$" "" RIDESHIELD_RESOURCE_NAME "${RIDESHIELD_RESOURCE_NAME}")
-    set(RIDESHIELD_RESOURCE_FUNCTION "resource_${RIDESHIELD_RESOURCE_NAME}")
 
     string(APPEND RIDESHIELD_RESOURCE_FIND_SNIPPET
         "    if (resource_path == \"${RIDESHIELD_RESOURCE_FILE}\") {\n"
         "        return detail::make_span(b::embed<\"${RIDESHIELD_RESOURCE_FILE}\">());\n"
         "    }\n")
 
-    string(APPEND RIDESHIELD_RESOURCE_ACCESSOR_SNIPPET
-        "inline auto ${RIDESHIELD_RESOURCE_FUNCTION}() noexcept -> ResourceSpan {\n"
-        "    return detail::make_span(b::embed<\"${RIDESHIELD_RESOURCE_FILE}\">());\n"
-        "}\n\n")
+    string(APPEND RIDESHIELD_RESOURCE_ANCHOR_SNIPPET
+        "    embedded_resource_total += RideShield::resources::find(\"${RIDESHIELD_RESOURCE_FILE}\").size();\n")
 endforeach()
 
+string(APPEND RIDESHIELD_RESOURCE_ANCHOR_SNIPPET
+    "    return embedded_resource_total;\n"
+    "}();\n"
+    "}  // namespace\n")
+
 file(WRITE "${RIDESHIELD_GENERATED_INCLUDE_DIR}/rideshield_resources_find.inc" "${RIDESHIELD_RESOURCE_FIND_SNIPPET}")
-file(WRITE "${RIDESHIELD_GENERATED_INCLUDE_DIR}/rideshield_resources_accessors.inc" "${RIDESHIELD_RESOURCE_ACCESSOR_SNIPPET}")
+string(CONCAT RIDESHIELD_RESOURCE_IMPL_SNIPPET
+    "#include \"resources.h\"\n\n"
+    "namespace RideShield::resources {\n\n"
+    "auto find(std::string_view resource_path) noexcept -> ResourceSpan {\n"
+    "#ifdef RIDESHIELD_HAS_EMBEDDED_RESOURCES\n"
+    "#include \"rideshield_resources_find.inc\"\n"
+    "#else\n"
+    "    (void)resource_path;\n"
+    "#endif\n"
+    "    return {};\n"
+    "}\n\n"
+    "}  // namespace RideShield::resources\n")
+set(RIDESHIELD_RESOURCE_IMPL_SOURCE "${RIDESHIELD_GENERATED_INCLUDE_DIR}/rideshield_resources.cpp")
+file(WRITE "${RIDESHIELD_RESOURCE_IMPL_SOURCE}" "${RIDESHIELD_RESOURCE_IMPL_SNIPPET}")
+set(RIDESHIELD_RESOURCE_ANCHOR_SOURCE "${RIDESHIELD_GENERATED_INCLUDE_DIR}/rideshield_resources_anchor.cpp")
+file(WRITE "${RIDESHIELD_RESOURCE_ANCHOR_SOURCE}" "${RIDESHIELD_RESOURCE_ANCHOR_SNIPPET}")
+
+target_sources(${PROJECT_TARGET_LIB} PRIVATE "${RIDESHIELD_RESOURCE_IMPL_SOURCE}")
 
 target_include_directories(${PROJECT_TARGET_LIB} PUBLIC
     ${PROJECT_SOURCE_DIR}/inc
@@ -157,6 +191,33 @@ endif()
 # ── Qt6 Quick 车机 UI（默认启用） ──
 set(RIDESHIELD_HAS_QT_UI OFF)
 if(RIDESHIELD_ENABLE_UI)
+    if(CMAKE_CROSSCOMPILING AND NOT Qt6_DIR)
+        set(_rideshield_qt_multiarch "${CMAKE_LIBRARY_ARCHITECTURE}")
+        if(NOT _rideshield_qt_multiarch AND DEFINED RK3588_TOOLCHAIN_PREFIX)
+            set(_rideshield_qt_multiarch "${RK3588_TOOLCHAIN_PREFIX}")
+        endif()
+
+        set(_rideshield_qt6_dir_candidates)
+        if(CMAKE_SYSROOT AND _rideshield_qt_multiarch)
+            list(APPEND _rideshield_qt6_dir_candidates
+                "${CMAKE_SYSROOT}/usr/lib/${_rideshield_qt_multiarch}/cmake/Qt6")
+        endif()
+        if(_rideshield_qt_multiarch)
+            list(APPEND _rideshield_qt6_dir_candidates
+                "/usr/lib/${_rideshield_qt_multiarch}/cmake/Qt6")
+        endif()
+
+        foreach(_rideshield_qt6_dir IN LISTS _rideshield_qt6_dir_candidates)
+            if(EXISTS "${_rideshield_qt6_dir}/Qt6Config.cmake")
+                set(Qt6_DIR "${_rideshield_qt6_dir}" CACHE PATH "Qt6 config directory for target platform" FORCE)
+                break()
+            endif()
+        endforeach()
+        unset(_rideshield_qt6_dir)
+        unset(_rideshield_qt6_dir_candidates)
+        unset(_rideshield_qt_multiarch)
+    endif()
+
     find_package(Qt6 6.5 QUIET COMPONENTS Quick QuickControls2)
     if(Qt6_FOUND)
         set(RIDESHIELD_HAS_QT_UI ON)
@@ -195,10 +256,12 @@ if(RIDESHIELD_HAS_QT_UI)
         Qt6::Quick
         Qt6::QuickControls2
     )
+    rideshield_attach_embedded_resource_anchor(${PROJECT_NAME})
     target_compile_definitions(${PROJECT_NAME} PRIVATE RIDESHIELD_HAS_QT_UI=1)
 else()
     add_executable(${PROJECT_NAME} main.cpp)
     target_link_libraries(${PROJECT_NAME} PRIVATE ${PROJECT_TARGET_LIB})
+    rideshield_attach_embedded_resource_anchor(${PROJECT_NAME})
 endif()
 
 rideshield_configure_runtime_support(${PROJECT_NAME})
@@ -232,6 +295,7 @@ if(BUILD_TESTING)
 
         target_compile_features(${TEST_NAME} PRIVATE cxx_std_23)
         target_compile_definitions(${TEST_NAME} PRIVATE PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+        rideshield_attach_embedded_resource_anchor(${TEST_NAME})
         rideshield_configure_runtime_support(${TEST_NAME})
 
         list(APPEND RIDESHIELD_TEST_TARGETS ${TEST_NAME})

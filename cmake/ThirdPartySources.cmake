@@ -7,6 +7,10 @@ set(RIDESHIELD_DEPENDENCY_TOOLCHAIN_FILE "" CACHE FILEPATH "Toolchain file forwa
 set(RIDESHIELD_TARGET_ARCH "${CMAKE_SYSTEM_PROCESSOR}" CACHE STRING "Target architecture forwarded to dependency builds")
 set(_rideshield_third_party_module_dir "${CMAKE_CURRENT_LIST_DIR}")
 
+if(CMAKE_CROSSCOMPILING AND NOT RIDESHIELD_DEPENDENCY_TOOLCHAIN_FILE AND CMAKE_TOOLCHAIN_FILE)
+    set(RIDESHIELD_DEPENDENCY_TOOLCHAIN_FILE "${CMAKE_TOOLCHAIN_FILE}" CACHE FILEPATH "Toolchain file forwarded to dependency builds" FORCE)
+endif()
+
 function(_rideshield_select_external_config out_var)
     if(CMAKE_CONFIGURATION_TYPES)
         set(_config_candidates ${CMAKE_CONFIGURATION_TYPES})

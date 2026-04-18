@@ -62,8 +62,20 @@ function(rideshield_resolve_dependencies)
 
     _rideshield_prepend_prefix_if_exists("${RIDESHIELD_THIRD_PARTY_INSTALL_DIR}/opencv")
 
-    find_package(fmt QUIET)
-    if(NOT fmt_FOUND)
+    set(_rideshield_use_system_fmt ON)
+    if(CMAKE_CROSSCOMPILING)
+        set(_rideshield_use_system_fmt OFF)
+        unset(fmt_DIR CACHE)
+    endif()
+
+    if(_rideshield_use_system_fmt)
+        find_package(fmt QUIET)
+    endif()
+
+    if(NOT TARGET fmt::fmt)
+        set(FMT_DOC OFF CACHE BOOL "" FORCE)
+        set(FMT_INSTALL OFF CACHE BOOL "" FORCE)
+        set(FMT_TEST OFF CACHE BOOL "" FORCE)
         FetchContent_Declare(
             fmt
             GIT_REPOSITORY https://github.com/fmtlib/fmt.git

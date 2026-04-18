@@ -105,7 +105,7 @@ int runUi(int argc, char* argv[]) {
             .score_threshold = 0.25f,
             .intra_threads = 4,
         };
-        cfg.model_data = RideShield::resources::resource_yolo26n_onnx();
+        cfg.model_data = RideShield::resources::get("res/yolo26n.onnx");
         try {
             front = std::make_unique<RideShield::perception::FrontPerception>(cfg);
             cap   = std::make_unique<cv::VideoCapture>(0);
@@ -181,7 +181,7 @@ int runHeadless(int argc, char* argv[]) {
         .intra_threads = 4,
     };
 
-    auto model_span = RideShield::resources::resource_yolo26n_onnx();
+    auto model_span = RideShield::resources::get("res/yolo26n.onnx");
     front_config.model_data = model_span;
     rear_config.model_data  = model_span;
     fmt::print("[RideShield] 使用嵌入式 ONNX 模型 ({} bytes)\n", model_span.size());

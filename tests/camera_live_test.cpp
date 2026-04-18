@@ -157,12 +157,12 @@ protected:
             .score_threshold = score_threshold,
             .intra_threads = threads,
         };
-        cfg.model_data = RideShield::resources::resource_yolo26n_onnx();
+        cfg.model_data = RideShield::resources::get("res/yolo26n.onnx");
         return cfg;
     }
 
     static bool model_available() {
-        return !RideShield::resources::resource_yolo26n_onnx().empty();
+        return !RideShield::resources::find("res/yolo26n.onnx").empty();
     }
 
     static auto make_perception_config() -> perception::FrontPerception::Config {

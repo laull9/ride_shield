@@ -26,14 +26,7 @@ inline auto make_span(const b::EmbedInternal::EmbeddedFile& file) noexcept -> Re
 
 }  // namespace detail
 
-inline auto find(std::string_view resource_path) noexcept -> ResourceSpan {
-#ifdef RIDESHIELD_HAS_EMBEDDED_RESOURCES
-#include "rideshield_resources_find.inc"
-#else
-	(void)resource_path;
-#endif
-	return {};
-}
+auto find(std::string_view resource_path) noexcept -> ResourceSpan;
 
 inline auto get(std::string_view resource_path) -> ResourceSpan {
 	const auto resource = find(resource_path);
@@ -43,9 +36,5 @@ inline auto get(std::string_view resource_path) -> ResourceSpan {
 
 	throw std::runtime_error("Embedded resource not found: " + std::string(resource_path));
 }
-
-#ifdef RIDESHIELD_HAS_EMBEDDED_RESOURCES
-#include "rideshield_resources_accessors.inc"
-#endif
 
 }  // namespace RideShield::resources
